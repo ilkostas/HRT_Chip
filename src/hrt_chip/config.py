@@ -32,6 +32,12 @@ EvaluatorBackend = Literal["stub", "official"]
 # Phase 6: how many per-candidate JSON files to keep on disk after a run.
 ArtifactRetentionMode = Literal["full", "compact", "best_only"]
 
+# Mixed-size handoff: stub (no-op) vs analytical estimate (utilization + RUDY proxy).
+MixedSizeBackendName = Literal["stub", "estimate"]
+
+# Synthetic dataset curriculum (Phase 4+).
+SyntheticCurriculum = Literal["grid_v1", "benchmark_like"]
+
 
 def resolved_guidance_sweep(
     *,
@@ -58,13 +64,18 @@ class SyntheticDatasetConfig:
     dataset_version: str = "1"
     """Logical version string stored in the dataset manifest."""
     schema_version: str = "hrt_synthetic_pyg_v1"
-    """Schema id for loaders."""
+    """Schema id for loaders; benchmark_like curriculum bumps to v2 in the written manifest."""
 
     # v1: fewer macros; v2: larger graphs (paper-style progression).
     n_macros_min: int | None = None
     n_macros_max: int | None = None
 
+    curriculum: SyntheticCurriculum = "grid_v1"
+    """``grid_v1``: legacy packed grid; ``benchmark_like``: heavy-tail sizes + spatial net sampling."""
+
     def __post_init__(self) -> None:
+        if self.curriculum not in ("grid_v1", "benchmark_like"):
+            raise ValueError(f"curriculum must be grid_v1 or benchmark_like, got {self.curriculum!r}")
         if self.n_macros_min is None or self.n_macros_max is None:
             if self.corpus_version == "v1":
                 self.n_macros_min = 2
@@ -82,6 +93,7 @@ class SyntheticDatasetConfig:
     def from_dict(cls, data: dict[str, Any]) -> SyntheticDatasetConfig:
         out = dict(data)
         out["output_dir"] = Path(out.get("output_dir", "data/synthetic"))
+        out.setdefault("curriculum", "grid_v1")
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})
 
 
@@ -160,6 +172,18 @@ class RunConfig:
     artifact_retention_top_k: int | None = None
     """When ``artifact_retention`` is ``compact``, optionally keep the top-K candidate JSONs by proxy (lowest first). ``None`` means keep none."""
 
+    wall_clock_budget_seconds: float | None = None
+    """If set, shrink guidance sweep / per-vector candidate count to fit this wall-clock budget."""
+
+    mixed_size_backend: MixedSizeBackendName = "estimate"
+    """``stub``: no-op success; ``estimate``: utilization + RUDY proxy (no DREAMPlace binary)."""
+
+    diffusion_inference_steps: int | None = None
+    """Optional cap on reverse-diffusion steps for ``pytorch_checkpoint`` sampler (accelerated sampling)."""
+
+    trends_log_path: str | None = None
+    """Append-only JSONL path for sweep trend lines (default: runs/trends/sweep_history.jsonl)."""
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["output_dir"] = str(self.output_dir)
@@ -173,6 +197,10 @@ class RunConfig:
             d["testcase_root"] = str(self.testcase_root)
         else:
             d["testcase_root"] = None
+        d["wall_clock_budget_seconds"] = self.wall_clock_budget_seconds
+        d["mixed_size_backend"] = self.mixed_size_backend
+        d["diffusion_inference_steps"] = self.diffusion_inference_steps
+        d["trends_log_path"] = self.trends_log_path
         return d
 
     @classmethod
@@ -201,4 +229,8 @@ class RunConfig:
         out.setdefault("deterministic_verification", False)
         out.setdefault("artifact_retention", "full")
         out.setdefault("artifact_retention_top_k", None)
+        out.setdefault("wall_clock_budget_seconds", None)
+        out.setdefault("mixed_size_backend", "estimate")
+        out.setdefault("diffusion_inference_steps", None)
+        out.setdefault("trends_log_path", None)
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})

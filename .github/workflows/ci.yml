@@ -31,7 +31,5 @@ jobs:
           uv run hrt-chip run --benchmark ibm01 --seed 1 --candidates 2 --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run
           uv run hrt-chip replay "$SMOKE_ROOT/phase6-smoke-run/manifest.json" --verify
 
-      - name: Benchmark sweep subset (stub)
-        run: |
-          uv run hrt-chip benchmark-sweep --evaluator stub --benchmark ibm01 --benchmark ibm02 \
-            --candidates 1 --output-dir "${RUNNER_TEMP}/hrt_sweep_smoke" --sweep-id ci_subset
+      - name: Stub sweep regression (Gate A + trends JSONL)
+        run: uv run python tools/check_stub_sweep_regression.py

@@ -18,7 +18,7 @@ from hrt_chip.diffusion import (
     SamplerProvenance,
 )
 from hrt_chip.training.checkpoint import load_checkpoint, read_dataset_version_from_manifest
-from hrt_chip.training.schedule import p_sample_step_eps
+from hrt_chip.training.schedule import p_sample_step_eps, subsampled_reverse_timesteps
 
 
 class PyTorchDDPMSampler:
@@ -34,6 +34,7 @@ class PyTorchDDPMSampler:
         device: torch.device | None = None,
         training_dataset_version: str | None = None,
         model_architecture: str | None = None,
+        diffusion_inference_steps: int | None = None,
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path)
         dev = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -54,6 +55,7 @@ class PyTorchDDPMSampler:
             self.model_architecture = model_architecture or str(tr.model_architecture)
         else:
             self.model_architecture = model_architecture or "baseline_gnn"
+        self.diffusion_inference_steps = diffusion_inference_steps
 
     @torch.no_grad()
     def sample_batch(self, request: DiffusionSampleRequest) -> SampleBatch:
@@ -65,6 +67,11 @@ class PyTorchDDPMSampler:
 
         out_candidates: list[CandidateSample] = []
         T = self.sched.num_timesteps
+        rev_steps = subsampled_reverse_timesteps(
+            num_timesteps=T,
+            num_inference_steps=self.diffusion_inference_steps,
+        )
+        eff_steps = len(rev_steps)
 
         for idx in range(request.num_candidates):
             g = torch.Generator(device=self.device)
@@ -80,7 +87,7 @@ class PyTorchDDPMSampler:
             batch = Batch.from_data_list([data])
 
             x = torch.randn(n, 2, generator=g, device=self.device, dtype=torch.float32)
-            for t_scalar in reversed(range(T)):
+            for t_scalar in rev_steps:
                 t_node = torch.full((n,), t_scalar, device=self.device, dtype=torch.long)
                 x = p_sample_step_eps(self.model, x, t_scalar, self.sched, batch, t_node)
 
@@ -108,7 +115,7 @@ class PyTorchDDPMSampler:
             coord_space=COORD_SPACE_NORMALIZED,
             seed=request.seed,
             num_candidates=request.num_candidates,
-            diffusion_steps=min(request.diffusion_steps, T),
+            diffusion_steps=eff_steps,
             guidance=guidance_dict,
             checkpoint_path=str(self.checkpoint_path.resolve()),
             training_dataset_version=self.training_dataset_version,
@@ -124,4 +131,5 @@ def build_pytorch_sampler(config: RunConfig) -> PyTorchDDPMSampler:
         config.checkpoint_path,
         training_dataset_version=config.training_dataset_version,
         model_architecture=config.model_architecture,
+        diffusion_inference_steps=config.diffusion_inference_steps,
     )

@@ -20,6 +20,7 @@ from hrt_chip.benchmarks import (
 from hrt_chip.config import RunConfig
 from hrt_chip.io.artifacts import write_json
 from hrt_chip.pipeline import run_pipeline
+from hrt_chip.sweep_trends import append_sweep_trend
 
 
 def run_ibm_benchmark_sweep(
@@ -99,5 +100,19 @@ def run_ibm_benchmark_sweep(
             "aggregate_replace_proxy": AGGREGATE_REPLACE_PROXY,
         },
     )
-    write_json(sweep_root / "sweep_report.json", report.to_dict())
+    rd = report.to_dict()
+    write_json(sweep_root / "sweep_report.json", rd)
+    trend_payload = {
+        "sweep_id": report.sweep_id,
+        "evaluator_backend": report.evaluator_backend,
+        "gate_a_legal_all": report.gates.gate_a_legal_all,
+        "gate_b_beat_sa_aggregate": report.gates.gate_b_beat_sa_aggregate,
+        "gate_c_beat_replace_aggregate": report.gates.gate_c_beat_replace_aggregate,
+        "mean_proxy": report.gates.mean_proxy,
+        "legal_count": report.gates.legal_count,
+        "total_count": report.gates.total_count,
+        "mean_runtime_seconds": report.mean_runtime_seconds,
+        "total_runtime_seconds": report.total_runtime_seconds,
+    }
+    append_sweep_trend(trend_payload, log_path=base_config.trends_log_path)
     return report, {"sweep_root": sweep_root, "errors": errors}

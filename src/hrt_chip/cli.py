@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Optional, cast
+from typing import Annotated, Literal, Optional, cast
 
 import typer
 from rich.console import Console
@@ -20,8 +20,10 @@ from hrt_chip.benchmarks import (
 from hrt_chip.config import (
     ArtifactRetentionMode,
     EvaluatorBackend,
+    MixedSizeBackendName,
     RunConfig,
     SamplerBackend,
+    SyntheticCurriculum,
     SyntheticDatasetConfig,
     TrainingConfig,
 )
@@ -75,15 +77,16 @@ def run(
         "--guidance-preset",
         help="Built-in multi-weight sweep: pareto3 (see docs). Ignored if --guidance-weight is set.",
     ),
-    guidance_weight: Optional[list[str]] = typer.Option(
-        None,
-        "--guidance-weight",
-        multiple=True,
-        help=(
-            "One triple alpha,beta,gamma (HPWL, congestion, legality surrogates). "
-            "Repeat option for multiple vectors; overrides --guidance-preset."
+    guidance_weight: Annotated[
+        list[str],
+        typer.Option(
+            "--guidance-weight",
+            help=(
+                "One triple alpha,beta,gamma (HPWL, congestion, legality surrogates). "
+                "Repeat option for multiple vectors; overrides --guidance-preset."
+            ),
         ),
-    ),
+    ] = [],
     sampler_backend: str = typer.Option(
         "stub",
         "--sampler-backend",
@@ -135,15 +138,37 @@ def run(
         "--artifact-retention-top-k",
         help="With compact retention, keep top-K candidate JSONs by proxy (omit = keep none).",
     ),
+    wall_clock_budget_seconds: Optional[float] = typer.Option(
+        None,
+        "--wall-clock-budget-seconds",
+        help="Optional wall-clock budget; shrinks per-vector candidates or guidance sweep heuristically.",
+    ),
+    mixed_size_backend: str = typer.Option(
+        "estimate",
+        "--mixed-size-backend",
+        help="stub (no-op) or estimate (utilization + RUDY proxy; default estimate).",
+    ),
+    diffusion_inference_steps: Optional[int] = typer.Option(
+        None,
+        "--diffusion-inference-steps",
+        help="Fewer reverse steps for pytorch_checkpoint sampler (accelerated sampling).",
+    ),
+    trends_log_path: Optional[str] = typer.Option(
+        None,
+        "--trends-log-path",
+        help="Optional JSONL path for sweep trend lines (used by benchmark-sweep).",
+    ),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     if evaluator not in ("stub", "official"):
         raise typer.BadParameter("--evaluator must be stub or official")
+    if mixed_size_backend not in ("stub", "estimate"):
+        raise typer.BadParameter("--mixed-size-backend must be stub or estimate")
     if artifact_retention not in ("full", "compact", "best_only"):
         raise typer.BadParameter("--artifact-retention must be full, compact, or best_only")
-    gw = _parse_guidance_weight_triples(guidance_weight)
+    gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     cfg = RunConfig(
         benchmark_id=benchmark,
@@ -163,6 +188,10 @@ def run(
         model_architecture=arch,
         evaluator_backend=cast(EvaluatorBackend, evaluator),
         testcase_root=testcase_root,
+        wall_clock_budget_seconds=wall_clock_budget_seconds,
+        mixed_size_backend=cast(MixedSizeBackendName, mixed_size_backend),
+        diffusion_inference_steps=diffusion_inference_steps,
+        trends_log_path=trends_log_path,
     )
     results = run_pipeline(cfg, run_id=run_id)
     _print_summary(results, cfg)
@@ -210,10 +239,17 @@ def dataset_generate_cmd(
     seed: int = typer.Option(42, "--seed", "-s"),
     num_samples: int = typer.Option(256, "--num-samples", "-n"),
     dataset_version: str = typer.Option("1", "--dataset-version"),
+    curriculum: str = typer.Option(
+        "grid_v1",
+        "--curriculum",
+        help="grid_v1 (legacy packed grid) or benchmark_like (heavy-tail sizes + spatial degrees).",
+    ),
 ) -> None:
     """Generate synthetic legal layouts and PyG shards (Phase 4)."""
     if corpus not in ("v1", "v2"):
         raise typer.BadParameter("--corpus must be v1 or v2")
+    if curriculum not in ("grid_v1", "benchmark_like"):
+        raise typer.BadParameter("--curriculum must be grid_v1 or benchmark_like")
     from hrt_chip.data.synthetic import generate_synthetic_dataset
 
     cfg = SyntheticDatasetConfig(
@@ -222,6 +258,7 @@ def dataset_generate_cmd(
         seed=seed,
         num_samples=num_samples,
         dataset_version=dataset_version,
+        curriculum=cast(SyntheticCurriculum, curriculum),
     )
     manifest_path = generate_synthetic_dataset(cfg)
     console.print(f"[bold green]Dataset written[/bold green] manifest={manifest_path}")
@@ -338,29 +375,54 @@ def benchmark_sweep_cmd(
         "--guidance-preset",
         help="Built-in sweep: pareto3. Ignored if --guidance-weight is set.",
     ),
-    guidance_weight: Optional[list[str]] = typer.Option(
-        None,
-        "--guidance-weight",
-        multiple=True,
-        help="Repeatable triple alpha,beta,gamma; overrides --guidance-preset.",
-    ),
+    guidance_weight: Annotated[
+        list[str],
+        typer.Option(
+            "--guidance-weight",
+            help="Repeatable triple alpha,beta,gamma; overrides --guidance-preset.",
+        ),
+    ] = [],
     sampler_backend: str = typer.Option("stub", "--sampler-backend"),
     checkpoint: Optional[Path] = typer.Option(None, "--checkpoint"),
     training_dataset_version: Optional[str] = typer.Option(None, "--training-dataset-version"),
     model_architecture: Optional[str] = typer.Option(None, "--model-architecture"),
-    benchmark: Optional[list[str]] = typer.Option(
+    benchmark: Annotated[
+        list[str],
+        typer.Option(
+            "--benchmark",
+            "-b",
+            help="Restrict sweep to these benchmark ids (repeatable). Default: all 17 IBM designs.",
+        ),
+    ] = [],
+    wall_clock_budget_seconds: Optional[float] = typer.Option(
         None,
-        "--benchmark",
-        "-b",
-        help="Restrict sweep to these benchmark ids (repeatable). Default: all 17 IBM designs.",
+        "--wall-clock-budget-seconds",
+        help="Per-benchmark wall-clock budget (passed through RunConfig; shrinks sweep heuristically).",
+    ),
+    mixed_size_backend: str = typer.Option(
+        "estimate",
+        "--mixed-size-backend",
+        help="stub or estimate (default).",
+    ),
+    diffusion_inference_steps: Optional[int] = typer.Option(
+        None,
+        "--diffusion-inference-steps",
+        help="Accelerated pytorch_checkpoint reverse steps per benchmark run.",
+    ),
+    trends_log_path: Optional[str] = typer.Option(
+        None,
+        "--trends-log-path",
+        help="Append gate summary JSON lines (default runs/trends/sweep_history.jsonl if unset).",
     ),
 ) -> None:
     """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
     if evaluator not in ("stub", "official"):
         raise typer.BadParameter("--evaluator must be stub or official")
+    if mixed_size_backend not in ("stub", "estimate"):
+        raise typer.BadParameter("--mixed-size-backend must be stub or estimate")
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
-    gw = _parse_guidance_weight_triples(guidance_weight)
+    gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     base = RunConfig(
         benchmark_id="ibm01",
@@ -377,6 +439,10 @@ def benchmark_sweep_cmd(
         model_architecture=arch,
         evaluator_backend=cast(EvaluatorBackend, evaluator),
         testcase_root=testcase_root,
+        wall_clock_budget_seconds=wall_clock_budget_seconds,
+        mixed_size_backend=cast(MixedSizeBackendName, mixed_size_backend),
+        diffusion_inference_steps=diffusion_inference_steps,
+        trends_log_path=trends_log_path,
     )
     bench_tuple: tuple[str, ...] | None = None
     if benchmark:

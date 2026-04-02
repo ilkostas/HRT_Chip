@@ -97,6 +97,7 @@ def test_pipeline_scoring_table_and_argmin(tmp_path: Path) -> None:
         assert "surrogate_objectives" in row
         so = row["surrogate_objectives"]
         assert "phi_hpwl" in so and "phi_congestion" in so and "phi_legality" in so
+        assert "surrogate_mode" in so
 
     ranking = r["ranking"]
     assert ranking == sorted(ranking, key=lambda x: x["proxy_score"])

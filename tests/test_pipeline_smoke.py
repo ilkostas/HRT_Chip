@@ -20,9 +20,11 @@ def test_run_pipeline_deterministic(tmp_path: Path) -> None:
         num_candidates=3,
         output_dir=tmp_path,
         deterministic=True,
+        mixed_size_backend="stub",
     )
     r1 = run_pipeline(cfg, run_id="00000000-0000-0000-0000-000000000001")
     r2 = run_pipeline(cfg, run_id="00000000-0000-0000-0000-000000000001")
+    assert r1.get("results_schema_version") == r2.get("results_schema_version")
     assert r1["best_candidate_id"] == r2["best_candidate_id"]
     assert r1["best_proxy_score"] == r2["best_proxy_score"]
     assert len(r1["ranking"]) == 3

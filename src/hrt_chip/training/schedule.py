@@ -46,6 +46,31 @@ def q_sample(
 
 
 @torch.no_grad()
+def subsampled_reverse_timesteps(*, num_timesteps: int, num_inference_steps: int | None) -> list[int]:
+    """
+    Monotonic decreasing timestep indices for accelerated sampling.
+
+    When ``num_inference_steps`` is None or >= T, returns full ``[T-1, ..., 0]``.
+    Always ends at 0 so the final denoising mean is applied at t=0.
+    """
+    T = int(num_timesteps)
+    if T <= 0:
+        return []
+    if num_inference_steps is None or int(num_inference_steps) <= 0 or int(num_inference_steps) >= T:
+        return list(range(T - 1, -1, -1))
+    ns = max(2, min(int(num_inference_steps), T))
+    raw = [int(round(i * (T - 1) / max(ns - 1, 1))) for i in range(ns)]
+    if 0 not in raw:
+        raw.append(0)
+    out: list[int] = []
+    seen: set[int] = set()
+    for t in sorted(raw, reverse=True):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def p_sample_step_eps(
     eps_model: torch.nn.Module,
     x: torch.Tensor,

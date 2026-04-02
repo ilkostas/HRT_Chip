@@ -65,6 +65,8 @@ def test_run_ibm_benchmark_sweep_stub_two_benchmarks(tmp_path: Path) -> None:
         output_dir=tmp_path,
         evaluator_backend="stub",
         guidance_preset=None,
+        mixed_size_backend="stub",
+        trends_log_path=str(tmp_path / "trends.jsonl"),
     )
     report, meta = run_ibm_benchmark_sweep(
         base,
@@ -75,6 +77,9 @@ def test_run_ibm_benchmark_sweep_stub_two_benchmarks(tmp_path: Path) -> None:
     assert len(report.rows) == 2
     assert {r.benchmark_id for r in report.rows} == {"ibm01", "ibm02"}
     assert (meta["sweep_root"] / "sweep_report.json").is_file()
+    trend = tmp_path / "trends.jsonl"
+    assert trend.is_file()
+    assert len(trend.read_text(encoding="utf-8").strip().splitlines()) >= 1
 
 
 def test_run_ibm_benchmark_sweep_stub_subset(tmp_path: Path) -> None:
@@ -85,6 +90,8 @@ def test_run_ibm_benchmark_sweep_stub_subset(tmp_path: Path) -> None:
         output_dir=tmp_path,
         evaluator_backend="stub",
         guidance_preset=None,
+        mixed_size_backend="stub",
+        trends_log_path=str(tmp_path / "trends_single.jsonl"),
     )
     report, meta = run_ibm_benchmark_sweep(
         base,

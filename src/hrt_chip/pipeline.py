@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
 from hrt_chip.adapters.evaluator.base import EvaluationResult, EvaluatorAdapter
 from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
+from hrt_chip.adapters.mixed_size.estimate import MixedSizeEstimateBackend
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
 from hrt_chip.benchmarks import default_testcase_root
+from hrt_chip.budget import resolve_generation_budget
 from hrt_chip.config import RunConfig, resolved_guidance_sweep
 from hrt_chip.deterministic_runtime import apply_pipeline_determinism
 from hrt_chip.diffusion import DiffusionSampler
@@ -21,6 +24,7 @@ from hrt_chip.io.artifacts import (
     build_manifest,
     write_json,
 )
+from hrt_chip.io.baseline_schema import attach_results_schema_version
 from hrt_chip.replay_verify import compare_replay_to_baseline
 from hrt_chip.stages.evaluate import evaluate_candidate
 from hrt_chip.stages.generate import generate_candidates
@@ -55,6 +59,12 @@ def _resolve_sampler(config: RunConfig, sampler: DiffusionSampler | None) -> Dif
     return None
 
 
+def _resolve_mixed_size_backend(config: RunConfig) -> MixedSizeBackend:
+    if config.mixed_size_backend == "stub":
+        return LocalStubMixedSizeBackend()
+    return MixedSizeEstimateBackend()
+
+
 def run_pipeline(
     config: RunConfig,
     *,
@@ -73,6 +83,7 @@ def run_pipeline(
     Returns structured dict suitable for JSON serialization and CLI display.
     """
     apply_pipeline_determinism(config)
+    t_pipeline0 = time.perf_counter()
 
     testcase_path = config.testcase_root or Path(default_testcase_root())
     bench_obj: Any | None = None
@@ -89,7 +100,7 @@ def run_pipeline(
         prime_bundle = (config.benchmark_id, bench_obj, plc_obj)
 
     ev = evaluator or _resolve_evaluator(config, prime=prime_bundle)
-    ms = mixed_size or LocalStubMixedSizeBackend()
+    ms = mixed_size or _resolve_mixed_size_backend(config)
 
     manifest = build_manifest(config, run_id=run_id)
     artifacts = PipelineArtifacts(run_dir=config.output_dir / manifest.run_id)
@@ -102,15 +113,20 @@ def run_pipeline(
         "run_id": manifest.run_id,
     }
 
-    sweep = resolved_guidance_sweep(
+    sweep_requested = resolved_guidance_sweep(
         guidance_preset=config.guidance_preset,
         guidance_weights_sweep=config.guidance_weights_sweep,
     )
+    t_budget0 = time.perf_counter()
+    sweep, num_candidates_eff, budget_meta = resolve_generation_budget(config, sweep_requested)
+    budget_resolution_seconds = time.perf_counter() - t_budget0
+
     smp = _resolve_sampler(config, sampler)
+    t_gen0 = time.perf_counter()
     raw = generate_candidates(
         benchmark_id=config.benchmark_id,
         seed=config.seed,
-        num_candidates=config.num_candidates,
+        num_candidates=num_candidates_eff,
         macro_specs=macro_specs_arg,
         canvas_w=canvas_w,
         canvas_h=canvas_h,
@@ -118,13 +134,16 @@ def run_pipeline(
         guidance_sweep=sweep,
         sampler=smp,
     )
+    generation_seconds = time.perf_counter() - t_gen0
 
     evaluations: list[dict[str, Any]] = []
     scoring_table: list[dict[str, Any]] = []
     best: EvaluationResult | None = None
     best_candidate_id: str | None = None
 
+    legalize_eval_seconds = 0.0
     for cand in raw:
+        t_le = time.perf_counter()
         legalize_candidate(cand, canvas_w=canvas_w, canvas_h=canvas_h)
         if bench_obj is not None:
             from hrt_chip.official_benchmark import restore_fixed_macro_positions
@@ -140,6 +159,9 @@ def run_pipeline(
                 benchmark_id=config.benchmark_id,
                 fixed_macros=list(cand.macros),
                 seed=config.seed,
+                benchmark=bench_obj,
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
             )
             ms_result = ms.run(req)
             ms.attach_to_candidate(cand, ms_result)
@@ -150,7 +172,12 @@ def run_pipeline(
                 "extra": {"benchmark_id": config.benchmark_id, "n_macros": len(cand.macros)},
             }
 
-        objs = compute_objectives_for_candidate(cand)
+        objs = compute_objectives_for_candidate(
+            cand,
+            benchmark=bench_obj,
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+        )
         guidance_meta = cand.metadata.get("guidance")
         if not isinstance(guidance_meta, dict):
             guidance_meta = {}
@@ -161,6 +188,7 @@ def run_pipeline(
             benchmark_id=config.benchmark_id,
             run_context=run_context,
         )
+        legalize_eval_seconds += time.perf_counter() - t_le
         row = {
             "candidate_id": er.candidate_id,
             "proxy_score": er.proxy_score,
@@ -207,6 +235,7 @@ def run_pipeline(
         "testcase_root": str(testcase_path),
         "canvas_width": canvas_w,
         "canvas_height": canvas_h,
+        "guidance_sweep_requested": [list(t) for t in sweep_requested],
         "guidance_sweep_resolved": [list(t) for t in sweep],
         "sampler_provenance": sampler_provenance,
         "sampler_backend": config.sampler_backend,
@@ -218,7 +247,20 @@ def run_pipeline(
         "best_candidate_id": best_candidate_id,
         "best_proxy_score": best.proxy_score if best else None,
         "evaluations": evaluations,
+        "mixed_size_backend": config.mixed_size_backend,
+        "budget_resolution": {
+            **budget_meta,
+            "budget_resolution_seconds": budget_resolution_seconds,
+            "requested_num_candidates": config.num_candidates,
+            "resolved_num_candidates": num_candidates_eff,
+        },
+        "timing": {
+            "generation_seconds": generation_seconds,
+            "legalize_mixed_size_eval_seconds": legalize_eval_seconds,
+            "total_pipeline_seconds": time.perf_counter() - t_pipeline0,
+        },
     }
+    attach_results_schema_version(results)
     write_json(artifacts.results_path, results)
 
     apply_candidate_retention(

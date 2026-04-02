@@ -6,7 +6,7 @@ This document describes how the executable pipeline connects to external competi
 
 - **Config:** [`src/hrt_chip/config.py`](../src/hrt_chip/config.py) — `guidance_preset` (e.g. `pareto3`) or explicit `guidance_weights_sweep`; `resolved_guidance_sweep()` yields the `(α, β, γ)` list persisted in `results.json` as `guidance_sweep_resolved`.
 - **Generation:** [`src/hrt_chip/stages/generate.py`](../src/hrt_chip/stages/generate.py) — one `sample_batch` per weight vector; optional `DiffusionSampleRequest.guidance` in [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) (stub applies deterministic coordinate bias for diversity).
-- **Surrogates:** [`src/hrt_chip/guidance.py`](../src/hrt_chip/guidance.py) — fast HPWL-bbox, grid congestion, and overlap surrogates for `scoring_table` only; **Tier-1 selection uses evaluator proxy** (`run_pipeline` asserts `best_candidate_id == argmin(proxy_score)`).
+- **Surrogates:** [`src/hrt_chip/guidance.py`](../src/hrt_chip/guidance.py) + [`src/hrt_chip/netlist_surrogates.py`](../src/hrt_chip/netlist_surrogates.py) — when an official `Benchmark` is in scope, **LogSumExp net HPWL** and **RUDY** congestion feed `scoring_table`; otherwise bbox + occupancy-variance fallbacks. **Tier-1 selection still uses evaluator proxy only** (`run_pipeline` asserts `best_candidate_id == argmin(proxy_score)`).
 
 ## Diffusion sampler (Phase 2)
 
@@ -33,6 +33,7 @@ This document describes how the executable pipeline connects to external competi
 
 - **Contract:** [`src/hrt_chip/adapters/mixed_size/base.py`](../src/hrt_chip/adapters/mixed_size/base.py) — `MixedSizeBackend.run(MixedSizeRequest)` after macro legalization.
 - **Stub:** [`src/hrt_chip/adapters/mixed_size/local_stub.py`](../src/hrt_chip/adapters/mixed_size/local_stub.py) — no-op success.
+- **Estimate (default in CLI):** [`src/hrt_chip/adapters/mixed_size/estimate.py`](../src/hrt_chip/adapters/mixed_size/estimate.py) — macro area utilization, RUDY variance proxy from the loaded `Benchmark` nets, and backend runtime in `metadata["mixed_size"]["extra"]`. No standard-cell placement binary.
 - **Future:** Wire DREAMPlace, hMETIS, or competition-provided clustering/placement under `external/` and pass results via `PlacementCandidate.metadata["mixed_size"]` for the evaluator handoff.
 
 ## Official challenge repository (`external/`)

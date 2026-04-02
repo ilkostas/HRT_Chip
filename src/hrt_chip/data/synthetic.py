@@ -12,7 +12,11 @@ import torch
 from torch_geometric.data import Data
 
 from hrt_chip.config import SyntheticDatasetConfig
-from hrt_chip.data.graph_utils import complete_edge_index as _complete_edge_index
+from hrt_chip.data.graph_utils import (
+    complete_edge_index as _complete_edge_index,
+    node_features_from_wh_degree,
+    spatial_neighbor_degrees,
+)
 from hrt_chip.io.artifacts import DatasetManifest, utc_now_iso
 from hrt_chip.io.artifacts import write_json as write_json_atomic
 
@@ -64,10 +68,104 @@ def _legal_grid_layout(
     return x0, wh
 
 
+def _clip_exponential(rng: random.Random, lam: float, lo: float, hi: float) -> float:
+    u = max(rng.random(), 1e-12)
+    v = -math.log(u) * lam
+    return max(lo, min(hi, v))
+
+
+def _rects_overlap(ax: float, ay: float, aw: float, ah: float, bx: float, by: float, bw: float, bh: float) -> bool:
+    return not (ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay)
+
+
+def _benchmark_like_layout(
+    rng: random.Random,
+    n: int,
+    *,
+    canvas: float = 1.0,
+) -> list[tuple[float, float, float, float]] | None:
+    """Random non-overlapping rects in ``[0, canvas]^2`` with heavy-tail sizes."""
+    rects: list[tuple[float, float, float, float]] = []
+    for _ in range(n):
+        w = _clip_exponential(rng, lam=0.07 * canvas, lo=0.02 * canvas, hi=0.42 * canvas)
+        h = _clip_exponential(rng, lam=0.07 * canvas, lo=0.02 * canvas, hi=0.42 * canvas)
+        placed = False
+        for _ in range(3000):
+            x = rng.uniform(0.0, max(1e-9, canvas - w))
+            y = rng.uniform(0.0, max(1e-9, canvas - h))
+            ok = True
+            for ox, oy, ow, oh in rects:
+                if _rects_overlap(x, y, w, h, ox, oy, ow, oh):
+                    ok = False
+                    break
+            if ok:
+                rects.append((x, y, w, h))
+                placed = True
+                break
+        if not placed:
+            return None
+    return rects
+
+
+def _layout_to_tensors(
+    rects: list[tuple[float, float, float, float]],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    xs: list[float] = []
+    ys: list[float] = []
+    ws: list[float] = []
+    hs: list[float] = []
+    for x, y, w, h in rects:
+        cx, cy = _lower_left_to_normalized_center(x, y, w, h)
+        xs.append(cx)
+        ys.append(cy)
+        ws.append(w)
+        hs.append(h)
+    n = len(rects)
+    x0 = torch.tensor([[xs[i], ys[i]] for i in range(n)], dtype=torch.float32)
+    wh = torch.tensor([[ws[i], hs[i]] for i in range(n)], dtype=torch.float32)
+    return x0, wh
+
+
 def _node_features(wh: torch.Tensor) -> torch.Tensor:
     from hrt_chip.data.graph_utils import node_features_from_wh
 
     return node_features_from_wh(wh)
+
+
+def _sample_one_graph(
+    rng: random.Random,
+    n: int,
+    config: SyntheticDatasetConfig,
+    sample_idx: int,
+) -> Data:
+    if config.curriculum == "benchmark_like":
+        rects = _benchmark_like_layout(rng, n)
+        if rects is None:
+            x0, wh = _legal_grid_layout(rng, n)
+            feat_note = "benchmark_like_fallback_grid"
+        else:
+            x0, wh = _layout_to_tensors(rects)
+            feat_note = "benchmark_like_packed"
+        pos01 = (x0 + 1.0) * 0.5
+        deg = spatial_neighbor_degrees(rng, pos01, p0=0.5, length_scale=0.32)
+        x = node_features_from_wh_degree(wh, deg)
+    else:
+        x0, wh = _legal_grid_layout(rng, n)
+        x = _node_features(wh)
+        feat_note = "grid_v1"
+
+    edge_index = _complete_edge_index(n)
+    data = Data(
+        x=x,
+        edge_index=edge_index,
+        pos=x0.clone(),
+        macro_wh=wh,
+        num_nodes=n,
+    )
+    data.layout_id = sample_idx  # type: ignore[attr-defined]
+    data.curriculum = config.curriculum  # type: ignore[attr-defined]
+    data.layout_source = feat_note  # type: ignore[attr-defined]
+    return data
 
 
 def generate_synthetic_dataset(config: SyntheticDatasetConfig) -> Path:
@@ -105,27 +203,21 @@ def generate_synthetic_dataset(config: SyntheticDatasetConfig) -> Path:
 
     for _ in range(config.num_samples):
         n = rng.randint(nmin, nmax)
-        x0, wh = _legal_grid_layout(rng, n)
-        edge_index = _complete_edge_index(n)
-        x = _node_features(wh)
-        data = Data(
-            x=x,
-            edge_index=edge_index,
-            pos=x0.clone(),
-            macro_wh=wh,
-            num_nodes=n,
-        )
-        data.layout_id = sample_idx  # type: ignore[attr-defined]
+        data = _sample_one_graph(rng, n, config, sample_idx)
         shard.append(data)
         sample_idx += 1
         if len(shard) >= shard_size:
             flush_shard()
     flush_shard()
 
+    schema_ver = config.schema_version
+    if config.curriculum == "benchmark_like":
+        schema_ver = "hrt_synthetic_pyg_v2"
+
     manifest = DatasetManifest(
         dataset_id=dataset_id,
         dataset_version=config.dataset_version,
-        schema_version=config.schema_version,
+        schema_version=schema_ver,
         corpus_version=config.corpus_version,
         seed=config.seed,
         num_samples=config.num_samples,
@@ -134,7 +226,11 @@ def generate_synthetic_dataset(config: SyntheticDatasetConfig) -> Path:
         created_at_utc=utc_now_iso(),
         data_dir=str(out.resolve()),
         shards=shard_files,
-        notes="synthetic grid-packed legal layouts; pos stores x0 centers [-1,1]",
+        notes=(
+            f"curriculum={config.curriculum}; pos in [-1,1]; "
+            "benchmark_like uses clipped-exp sizes + spatial degree features; "
+            "message passing uses complete graph edge_index."
+        ),
     )
     manifest.write_json(out / "dataset_manifest.json")
 

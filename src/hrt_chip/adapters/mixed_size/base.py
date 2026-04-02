@@ -17,6 +17,10 @@ class MixedSizeRequest:
     fixed_macros: list[MacroRect]
     seed: int
     backend_options: dict[str, Any] = field(default_factory=dict)
+    """Optional official benchmark object (``macro_place.Benchmark``) for congestion estimates."""
+    benchmark: Any | None = None
+    canvas_w: float = 1.0
+    canvas_h: float = 1.0
 
 
 @dataclass

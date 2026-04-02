@@ -126,6 +126,7 @@ def test_replay_from_manifest_verify_passes(tmp_path: Path) -> None:
         output_dir=tmp_path,
         deterministic=True,
         evaluator_backend="stub",
+        mixed_size_backend="stub",
     )
     run_pipeline(cfg, run_id=rid)
     manifest = tmp_path / rid / "manifest.json"
@@ -143,6 +144,7 @@ def test_run_pipeline_artifact_retention_compact(tmp_path: Path) -> None:
         output_dir=tmp_path,
         artifact_retention="compact",
         evaluator_backend="stub",
+        mixed_size_backend="stub",
     )
     run_pipeline(cfg, run_id=rid)
     cdir = tmp_path / rid / "candidates"

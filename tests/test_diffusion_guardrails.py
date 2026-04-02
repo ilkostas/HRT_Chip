@@ -61,6 +61,7 @@ def test_pipeline_includes_sampler_provenance(tmp_path: Path) -> None:
         diffusion_steps=1000,
         output_dir=tmp_path,
         deterministic=True,
+        mixed_size_backend="stub",
     )
     r = run_pipeline(cfg, run_id="00000000-0000-0000-0000-000000000010")
     sp = r.get("sampler_provenance")

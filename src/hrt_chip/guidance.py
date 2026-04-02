@@ -2,15 +2,24 @@
 
 Official Tier-1 selection uses the evaluator proxy only; these components are for
 exploration metadata and future DDPM guidance hooks.
+
+When an official ``Benchmark``-like object is supplied, HPWL uses LogSumExp smoothing
+over net macro centers and congestion uses a RUDY-style net-bbox demand map.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from hrt_chip.geometry import overlap_area
 from hrt_chip.models import MacroRect, PlacementCandidate
+from hrt_chip.netlist_surrogates import (
+    benchmark_has_netlist,
+    hpwl_logsumexp_surrogate,
+    rudy_congestion_surrogate,
+)
 
 
 @dataclass(frozen=True)
@@ -100,12 +109,14 @@ class ObjectiveComponents:
     phi_hpwl: float
     phi_congestion: float
     phi_legality: float
+    surrogate_mode: str = "bbox_grid_legacy"
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, float | str]:
         return {
             "phi_hpwl": self.phi_hpwl,
             "phi_congestion": self.phi_congestion,
             "phi_legality": self.phi_legality,
+            "surrogate_mode": self.surrogate_mode,
         }
 
 
@@ -114,14 +125,41 @@ def compute_objective_components(
     *,
     canvas_w: float = 1.0,
     canvas_h: float = 1.0,
+    benchmark: Any | None = None,
 ) -> ObjectiveComponents:
+    if benchmark_has_netlist(benchmark):
+        hpwl = hpwl_logsumexp_surrogate(
+            macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h
+        )
+        cong = rudy_congestion_surrogate(macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h)
+        if math.isnan(hpwl):
+            hpwl = hpwl_bbox_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
+        if math.isnan(cong):
+            cong = congestion_grid_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
+        mode = "netlist_lse_rudy"
+    else:
+        hpwl = hpwl_bbox_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
+        cong = congestion_grid_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
+        mode = "bbox_grid_legacy"
     return ObjectiveComponents(
-        phi_hpwl=hpwl_bbox_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h),
-        phi_congestion=congestion_grid_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h),
+        phi_hpwl=hpwl,
+        phi_congestion=cong,
         phi_legality=legality_overlap_surrogate(macros),
+        surrogate_mode=mode,
     )
 
 
-def compute_objectives_for_candidate(candidate: PlacementCandidate) -> ObjectiveComponents:
+def compute_objectives_for_candidate(
+    candidate: PlacementCandidate,
+    *,
+    benchmark: Any | None = None,
+    canvas_w: float = 1.0,
+    canvas_h: float = 1.0,
+) -> ObjectiveComponents:
     """Compute surrogates for one candidate's current macro geometry."""
-    return compute_objective_components(candidate.macros)
+    return compute_objective_components(
+        candidate.macros,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+        benchmark=benchmark,
+    )
