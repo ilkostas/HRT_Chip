@@ -2,6 +2,8 @@
 
 This document summarizes our proposed approach to the macro placement competition: a framework built around **diffusion-based generation**, **legality via continuous guidance plus legalization** (not MaskPlace-style masking at inference), and **flexible multi-objective optimization at inference time**.
 
+Project decision: this repository follows a **diffusion-first only** implementation strategy (no parallel RL training track).
+
 ## 1. The core generator: diffusion models
 
 By using a diffusion model as the foundational engine, we bypass the slow, sequential trial-and-error process of standard reinforcement learning (RL). Instead of placing one block at a time, a diffusion model generates the **2D coordinates for all macros simultaneously**.
@@ -33,12 +35,9 @@ Therefore, a **diffusion-based pipeline must include a fast, greedy post-process
 
 Submissions are scored first on **Proxy Cost** (wirelength, density, congestion); top results are validated with **OpenROAD**: **WNS**, **TNS**, and **Area**.
 
-Depending on the **core engine**:
+For this diffusion-first stack, there is **no** separate critic/policy for objectives; use **inference-time weights** (e.g. treating HPWL and legality weights as **Lagrange multipliers** updated during denoising). This is **hand-tuned or searched**, analogous in spirit to **classifier-free guidance**—not a trained MORL head on the diffusion net.
 
-- **RL:** a true **multi-objective PPO (MOPPO)** can take a **preference weight vector ω** as part of the state and learn a family of policies.
-- **Diffusion:** there is **no** separate critic/policy for objectives; use **inference-time weights** (e.g. treating HPWL and legality weights as **Lagrange multipliers** updated during denoising). This is **hand-tuned or searched**, analogous in spirit to **classifier-free guidance**—not a trained MORL head on the diffusion net.
-
-**Pareto exploration:** sweep a **discrete set** of preference weights at inference (literature often illustrates on the order of **~10–15** distinct vectors). The sources do not prescribe a fixed sample count or a rule when **proxy rank** and **post-OpenROAD rank** disagree; the team must define a **validation strategy** (e.g. shortlist by proxy, then selective OpenROAD).
+**Pareto exploration:** sweep a **discrete set** of preference weights at inference (literature often illustrates on the order of **~10–15** distinct vectors). In this project, candidate selection is explicit: choose the single layout with the **lowest official Proxy Cost** after legalization.
 
 ## 4. Second stage: mixed-size and Grand Prize metrics
 
@@ -53,6 +52,15 @@ Plan this **second stage** explicitly if targeting full-flow **WNS / TNS / Area*
 ## Summary
 
 We combine **parallel diffusion placement** (synthetic-trained, MSE objective; proxy and legality via **guidance at inference**), **continuous legality potential + mandatory legalization** for **zero overlap** (not MaskPlace-style simultaneous masking), and **inference-time multi-objective weighting / Pareto search** to align proxy optimization with downstream PPA—within the competition runtime budget for the **placement** phase, with **OpenROAD** validation budgeted separately.
+
+## Reproducibility requirement
+
+All experiments and benchmark runs must include:
+
+- fixed seeds,
+- saved run configs,
+- candidate-level score logs,
+- deterministic verification mode for regression debugging.
 
 ## Related documentation
 

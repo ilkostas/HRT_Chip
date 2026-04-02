@@ -20,7 +20,7 @@ Classical image diffusion (e.g., DALL·E, Midjourney) generates **pixels**. Here
 
 ### Coordinate space (normalized end-to-end)
 
-Inside the network, macro centers live in a **continuous normalized** range (e.g. **`[-1, 1]`**) **end-to-end**. To handle **varying die sizes and aspect ratios** across benchmarks (e.g. the 18 IBM ICCAD04 circuits), **preprocess** by mapping all coordinates to the respective **chip boundaries**, and **only convert back to absolute die coordinates** when exporting (e.g. to DREAMPlace or DEF).
+Inside the network, macro centers live in a **continuous normalized** range (e.g. **`[-1, 1]`**) **end-to-end**. To handle **varying die sizes and aspect ratios** across benchmarks (the 17 IBM ICCAD04 circuits used in Tier 1), **preprocess** by mapping all coordinates to the respective **chip boundaries**, and **only convert back to absolute die coordinates** when exporting (e.g. to DREAMPlace or DEF).
 
 ### Forward process (adding noise)
 
@@ -30,7 +30,7 @@ Take a **good** layout—e.g., optimized and non-overlapping—and **gradually a
 
 The model is trained to **reverse** this corruption. At **inference** time, sampling **starts from pure noise** (random coordinates for all macros) and applies a neural network over a fixed number of timesteps (**T = 1000**, **cosine noise schedule**) to **denoise** incrementally, moving all coordinates **together** toward a structured, high-quality layout.
 
-Because denoising is **parallel over all macros** in each step, the **neural forward passes** for 1000 steps are on the order of **~2–10 minutes** on the class of hardware used in the paper and competition. The competition **1 hour per benchmark** wall clock is generous: use headroom to **multi-sample** (e.g. **16** layouts in parallel on **48 GB VRAM**), run a fast Step 2 legalizer and fast macro-fixed DREAMPlace on each candidate, then score with the **official** Proxy Cost and keep the best (see §5–6).
+Because denoising is **parallel over all macros** in each step, the **neural forward passes** for 1000 steps are on the order of **~2–21 minutes** depending on design scale and implementation details. The competition **1 hour per benchmark** wall clock is the hard budget: use headroom to **multi-sample** (e.g. **16** layouts in parallel on **48 GB VRAM**), run a fast Step 2 legalizer on each candidate, then score with the **official** Proxy Cost and keep the best.
 
 ---
 
@@ -114,7 +114,18 @@ The **competition** Proxy Cost (e.g. **1.0×WL + 0.5×Density + 0.5×Congestion*
 
 ## 6. Benchmarks and reported results (ICCAD04 / IBM)
 
-**Validation alignment:** use the **18 IBM ICCAD04** benchmarks (**ibm01**–**ibm18**): standard **mixed-size** circuits with on the order of **246–537 macros** plus large numbers of standard cells.
+**Validation alignment:** use the **17 IBM ICCAD04** benchmarks (**ibm01–ibm04, ibm06–ibm18**): standard **mixed-size** circuits with on the order of **246–537 macros** plus large numbers of standard cells.
+
+---
+
+## 7. Reproducibility controls (required)
+
+For this project, reproducibility is not optional:
+
+- Lock random seeds for data generation, training, and sampling.
+- Persist the exact run config (model, optimizer, guidance weights, dataset version, benchmark id).
+- Save candidate-level artifacts and scores so final selection can be replayed exactly.
+- Provide a deterministic compute mode for debugging/verification, even if normal competition runs use faster non-deterministic kernels.
 
 From **Chip Placement with Diffusion Models** (*macro-only* IBM table):
 

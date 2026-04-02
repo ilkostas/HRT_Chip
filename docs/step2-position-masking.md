@@ -5,7 +5,7 @@ To enforce **absolutely zero overlaps** between macros, the right mechanism depe
 - **Sequential RL placers (e.g. MaskPlace)** can use **position masking** on a discrete grid and get **0% overlap by construction** (on that grid).
 - **Simultaneous diffusion** places **all** macros in one trajectory; **MaskPlace-style masking does not apply** (no ordering of “previous” macros). Legality is pushed via a **continuous legality potential** during sampling, then completed with **post-processing legalization**.
 
-This document separates those two worlds. It also records **competition-aligned facts**: any algorithmic approach is allowed (sequential RL, GNNs, heuristics, hybrids). Earlier guidance favored **diffusion** for sample efficiency and wirelength on IBM benchmarks—you are **not** required to use diffusion, and **MaskPlace-style sequential RL remains a valid choice**.
+This document separates those two worlds. The competition permits many algorithmic families, but this repository is explicitly committed to a **diffusion-first** path. Sequential RL masking is documented for conceptual contrast, not as a parallel implementation track in this project.
 
 ---
 
@@ -116,9 +116,13 @@ This is standard when continuous guidance leaves **small** residual overlap risk
 
 The competition **welcomes hybrid** methods. Conceptually, you can combine grids, snapping, ordering, or multiple generators—provided the **final** placement is **continuously** legal.
 
-**Architectural note:** For **macro** placement specifically, it is often clearest to commit to **simultaneous diffusion + post-legalization**, then hand **fixed macro** positions to an analytical placer such as **DREAMPlace** for standard cells (see Step 1 overview). **Weaving MaskPlace-style sequential grid masking directly into the parallel, joint coordinate updates** of a diffusion sampler is **computationally conflicting** (different invariants per step). If you need masking’s guarantees, a **dedicated sequential RL (or ordered) branch** is usually cleaner than forcing autoregressive masks inside a joint diffusion inner loop.
+**Architectural note:** For this project, commit to **simultaneous diffusion + post-legalization**, then hand **fixed macro** positions to an analytical placer such as **DREAMPlace** for standard cells (see Step 1 overview). **Weaving MaskPlace-style sequential grid masking directly into the parallel, joint coordinate updates** of a diffusion sampler is **computationally conflicting** (different invariants per step), so this repository does not pursue an RL fallback branch.
 
 If coordinates are continuous but you use a **grid** for some checks, you might **snap** to anchors and look up feasibility—that is **not** the same as MaskPlace’s **autoregressive mask chain**. Any hybrid “mask” must be **consistent** with **joint** updates or with an **explicit ordering** and sampler design.
+
+### Implementation priority
+
+Because the competition disqualifies any residual overlap, Step 2 legalizer robustness is a first-priority deliverable before large-scale objective tuning.
 
 ---
 

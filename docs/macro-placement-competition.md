@@ -51,3 +51,19 @@ If your creation successfully surpasses the baselines on the required metrics an
 ## More detail
 
 Full rules, prizes, submission link, benchmark table, FAQ, and contacts: **[`README of Competition.md`](README%20of%20Competition.md)**. Questions: **contact@partcl.com** or the challenge GitHub.
+
+---
+
+## Project execution policy (this repository)
+
+- Core algorithm path: diffusion-first only (no parallel RL fallback track).
+- Dependency manager: `uv`.
+- Runtime interface: one end-to-end entrypoint command that performs generate -> legalize -> evaluate within the one-hour wall-clock budget.
+- Candidate policy: generate a Pareto-style batch, then submit the single candidate with the lowest official Proxy Cost.
+- Reproducibility controls are mandatory: fixed seeds, deterministic verification mode, config snapshots, and artifact logs for candidate-level scores.
+
+## Suggested milestone gates
+
+1. 100% legal placements (zero overlaps) on benchmark runs.
+2. Beat SA proxy baseline.
+3. Beat RePlAce proxy baseline.

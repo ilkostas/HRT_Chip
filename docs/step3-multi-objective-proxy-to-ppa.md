@@ -74,6 +74,10 @@ The frontier is explored by sweeping **discrete weight vectors** over **ϕ_hpwl*
 
 Research does not prescribe a universal **K**; choose **K** from GPU memory and the time needed for DDPM (often **~2–21 minutes** per run depending on circuit scale), legalizer, and downstream steps.
 
+### Practical one-hour budget policy
+
+Given the one-hour hard timeout, use diffusion for candidate generation early in the run and reserve substantial wall clock for legalization + scoring over the full candidate set.
+
 ### OpenROAD during your run
 
 **Zero** full OpenROAD (or multi-hour commercial P&R) runs fit in the **1-hour** inference budget. Organizers run the full flow **on their side** for Grand Prize evaluation (see §4).
@@ -100,6 +104,15 @@ Research does not prescribe a universal **K**; choose **K** from GPU memory and 
 Therefore, for **your** pipeline, the **default rule** is to **trust the proxy completely** for choosing what to submit: among your Pareto batch, submit the candidate with the **best (lowest) official proxy score**. You **cannot** use local OpenROAD timing to pick the winner without risking Tier 1; optimizing for a timing guess that hurts the proxy can **remove** you from the pool that ever gets WNS/TNS measured.
 
 This turns the placer from a **single-guess** optimizer into a **search** over **HPWL–congestion** trade-offs, with **Tier 1** survival determined solely by the **legalized** official proxy.
+
+## 5. Reproducibility controls (required)
+
+Run-to-run reproducibility is mandatory for this project:
+
+- fixed seeds for training and inference;
+- persisted config snapshots per run;
+- candidate-level artifact and score logging;
+- deterministic execution mode for verification and regression debugging.
 
 ---
 

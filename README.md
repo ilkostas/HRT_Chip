@@ -5,7 +5,7 @@ This project currently defines a diffusion-centered methodology for macro placem
 
 ## Project Thesis
 
-Macro placement is a constrained, high-dimensional optimization problem where seemingly local moves alter global routing, density, and timing behavior. This repository argues for a methodical, three-part strategy:
+Macro placement is a constrained, high-dimensional optimization problem where seemingly local moves alter global routing, density, and timing behavior. This repository commits to a diffusion-first, three-part strategy:
 
 1. Generate candidate macro coordinates with a simultaneous diffusion process.
 2. Enforce hard legality through overlap-aware guidance plus explicit post-processing legalization.
@@ -34,7 +34,7 @@ The proposed system is documented as a three-step pipeline.
 
 ### Step 1: Diffusion Core Generator
 
-The primary generator is a DDPM-style diffusion model that predicts continuous macro coordinates jointly rather than placing macros one-by-one. The design intent is to avoid sequential error accumulation typical of autoregressive RL placement while enabling batched candidate generation.
+The primary generator is a DDPM-style diffusion model that predicts continuous macro coordinates jointly rather than placing macros one-by-one. This repository does not maintain a parallel RL core; resources are focused on one diffusion implementation path plus a strong legalizer and evaluator loop.
 
 Key ideas:
 
@@ -49,7 +49,7 @@ This repository explicitly distinguishes two legality paradigms:
 - **Sequential RL masking** (MaskPlace-like): legality-by-construction on a placement order and discrete grid.
 - **Simultaneous diffusion**: no equivalent per-step autoregressive mask; legality is promoted using continuous overlap penalties and then completed by legalization.
 
-Design implication: in the current diffusion-first direction, a dedicated legalization stage is not optional; it is the mechanism that converts high-legality samples into strict zero-overlap placements required by the competition.
+Design implication: in this diffusion-first project, a dedicated legalization stage is not optional; it is the mechanism that converts high-legality samples into strict zero-overlap placements required by the competition.
 
 ### Step 3: Multi-Objective Proxy-to-PPA Bridge
 
@@ -59,7 +59,7 @@ Methodological principle:
 
 - Use inference-time diversity to generate robust candidates.
 - Use official proxy for submission selection to maximize tier-1 advancement probability.
-- Treat tier-2 PPA outcomes as downstream validation rather than a directly optimized in-loop objective (at this stage of the project).
+- Treat tier-2 PPA outcomes as downstream validation rather than a directly optimized in-loop objective inside the benchmark-time loop.
 
 ## Why This Architecture
 
@@ -90,7 +90,13 @@ The repository's analytical stance is that optimization-time surrogates and comp
 1. Generate multiple placement candidates with varied objective weights.
 2. Legalize each candidate to zero overlap.
 3. Evaluate all legalized candidates with official proxy definitions.
-4. Keep the best proxy candidate(s) for submission/evaluation.
+4. Keep the single best proxy candidate for submission/evaluation.
+
+### Runtime and Budget Strategy
+
+- Hard cap is one hour per benchmark end-to-end.
+- Use GPU-parallel diffusion sampling for candidate diversity.
+- Spend remaining wall-clock budget on legalization + official proxy evaluation across the candidate batch.
 
 ## Repository Map
 
@@ -129,7 +135,7 @@ The README intentionally avoids claiming implementation completeness.
 
 ## Environment and Reproducibility Notes
 
-No active Python project scaffold is present yet in the repository root (for example, no `pyproject.toml`, `uv.lock`, or `poetry.lock` at this stage). As a result:
+No active Python project scaffold is present yet in the repository root (for example, no `pyproject.toml` or `uv.lock` at this stage). As a result:
 
 - There is no canonical install command yet.
 - There are no runnable project commands yet.
@@ -137,17 +143,27 @@ No active Python project scaffold is present yet in the repository root (for exa
 
 When implementation begins, the environment section should be updated with:
 
-- dependency manager choice (`uv` or Poetry),
+- dependency manager choice (`uv`),
 - exact environment bootstrapping steps,
 - benchmark execution and evaluation commands.
+- a single end-to-end entrypoint command for generate -> legalize -> evaluate.
+
+### Reproducibility Controls (Project Requirement)
+
+This project treats reproducibility as mandatory:
+
+- lock random seeds for training and inference;
+- support deterministic compute mode for debugging and result verification;
+- snapshot run configs for every experiment;
+- log artifacts/metrics needed to reproduce benchmark outcomes and candidate selection.
 
 ## Next Milestones (Suggested)
 
-1. Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint).
-2. Implement diffusion sampling prototype with deterministic config control.
-3. Implement legality checker + greedy legalizer with explicit zero-overlap assertions.
-4. Add batch candidate evaluator using official proxy-compatible interfaces.
-5. Add experiment harness for IBM benchmark sweeps and structured result logging.
+1. Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.
+2. Implement legality checker + greedy legalizer with explicit zero-overlap assertions.
+3. Implement diffusion sampling prototype with deterministic/debug reproducibility controls.
+4. Add batch candidate evaluator using official proxy-compatible interfaces and best-proxy auto-selection.
+5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging.
 6. Add NG45-oriented handoff format/export path for downstream validation.
 
 ## References
