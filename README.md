@@ -100,7 +100,13 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Repository Map
 
-This repository is currently docs-centric. The key documents are:
+**Code (Phase 0–1):**
+
+- [`src/hrt_chip/`](src/hrt_chip/) — package: CLI, pipeline, stages, adapters, artifacts.
+- [`docs/integration-notes.md`](docs/integration-notes.md) — evaluator and mixed-size integration contracts.
+- [`external/`](external/) — reserved for official challenge submodule (see integration notes).
+
+**Documentation:** The key documents are:
 
 - [`docs/proposed-solution-overview.md`](docs/proposed-solution-overview.md)  
   High-level synthesis of the full approach.
@@ -114,56 +120,90 @@ This repository is currently docs-centric. The key documents are:
   Practical competition constraints and targets.
 - [`docs/README of Competition.md`](docs/README%20of%20Competition.md)  
   Full challenge statement, rules, prizes, and baseline context.
+- [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md)  
+  Concrete phase-by-phase execution order for implementation.
 
 ## Current Project Status
 
-This is a **research/design documentation phase** repository.
+Phase 0 scaffolding and **Phase 1 legality baseline** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**, shared geometry checks ([`src/hrt_chip/geometry.py`](src/hrt_chip/geometry.py)), and structured artifacts (manifest + per-candidate JSON + `results.json`). Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
 
 ### What Exists
 
 - Architecture rationale and method documentation.
 - Constraint analysis and evaluation framing.
 - Cross-step conceptual pipeline.
+- Runnable package [`src/hrt_chip/`](src/hrt_chip/) with CLI `hrt-chip` and module entrypoint `python -m hrt_chip`.
+- Adapter contracts for evaluator and mixed-size backend ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
-### What Does Not Yet Exist
+### What Is Still Stubbed / Planned
 
-- Executable training/inference code.
-- Official benchmark runner implementation in this repo.
-- Reproducible experiment scripts and result artifacts.
+- Real diffusion training and sampling (Phase 2+).
+- Official benchmark harness over all 17 IBM designs (Phase 5).
+- Real evaluator and DREAMPlace/hMETIS wiring behind adapters ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
-The README intentionally avoids claiming implementation completeness.
+## Environment and How to Run
 
-## Environment and Reproducibility Notes
+**Dependency manager:** [`uv`](https://docs.astral.sh/uv/). Install dependencies and sync the lockfile:
 
-No active Python project scaffold is present yet in the repository root (for example, no `pyproject.toml` or `uv.lock` at this stage). As a result:
+```bash
+uv sync
+```
 
-- There is no canonical install command yet.
-- There are no runnable project commands yet.
-- Setup guidance in this README is intentionally deferred until code scaffolding is added.
+Run the end-to-end stub pipeline (example: benchmark `ibm01`, 4 candidates, fixed seed):
 
-When implementation begins, the environment section should be updated with:
+```bash
+uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 4 --output-dir runs
+```
 
-- dependency manager choice (`uv`),
-- exact environment bootstrapping steps,
-- benchmark execution and evaluation commands.
-- a single end-to-end entrypoint command for generate -> legalize -> evaluate.
+Equivalent:
+
+```bash
+uv run python -m hrt_chip run --benchmark ibm01
+```
+
+Artifacts are written under `runs/<run_id>/`: `manifest.json`, `results.json`, and `candidates/*.json`.
+
+Re-run from a saved manifest (reproducibility):
+
+```bash
+uv run hrt-chip replay runs/<run_id>/manifest.json
+```
+
+### AWS / local secrets (when using cloud evaluators)
+
+If your workflow assumes an AWS role and env files (typical for this team):
+
+1. Assume role: `source env-assume-role.sh`
+2. Load variables: `source env.sh`
+
+(On Windows, use Git Bash/WSL or translate these to your shell.)
+
+### Official challenge repo submodule (optional)
+
+Reserve directory: [`external/`](external/). When you add the official challenge repository:
+
+```bash
+git submodule add <challenge-repo-url> external/challenge
+```
+
+Details: [`docs/integration-notes.md`](docs/integration-notes.md).
 
 ### Reproducibility Controls (Project Requirement)
 
 This project treats reproducibility as mandatory:
 
-- lock random seeds for training and inference;
-- support deterministic compute mode for debugging and result verification;
-- snapshot run configs for every experiment;
-- log artifacts/metrics needed to reproduce benchmark outcomes and candidate selection.
+- Lock random seeds for training and inference (stub generation uses `--seed`).
+- Each run writes `manifest.json` with config snapshot, run id, and UTC timestamp.
+- `hrt-chip replay` re-executes from a saved manifest.
+- Future: deterministic verification mode and CI smoke (roadmap Phase 6).
 
 ## Next Milestones (Suggested)
 
-1. Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.
-2. Implement legality checker + greedy legalizer with explicit zero-overlap assertions.
-3. Implement diffusion sampling prototype with deterministic/debug reproducibility controls.
-4. Add batch candidate evaluator using official proxy-compatible interfaces and best-proxy auto-selection.
-5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging.
+1. ~~Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.~~
+2. ~~Harden legality checker + greedy legalizer with explicit zero-overlap assertions (Phase 1).~~
+3. Implement diffusion sampling prototype with deterministic/debug reproducibility controls (Phase 2).
+4. Swap stub evaluator for official proxy-compatible adapter (Phase 3+).
+5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
 6. Add NG45-oriented handoff format/export path for downstream validation.
 
 ## References

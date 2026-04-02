@@ -1,2 +1,15 @@
 # Local / competition notes (not tracked)
 docs/README of Competition.md
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Run artifacts
+runs/
