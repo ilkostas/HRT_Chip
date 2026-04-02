@@ -34,6 +34,8 @@ def legalize_candidate(
     max_passes: int = 256,
     canvas_w: float = 1.0,
     canvas_h: float = 1.0,
+    hard_macro_count: int | None = None,
+    fixed_mask: list[bool] | None = None,
 ) -> PlacementCandidate:
     """
     Deterministic greedy legalization: fixed macro order; always adjust the higher-index macro.
@@ -48,38 +50,79 @@ def legalize_candidate(
     resolved_ops = 0
     passes_used = 0
 
+    hard_n = hard_macro_count if hard_macro_count is not None else len(macros)
+    fixed_mask_local = fixed_mask if fixed_mask is not None else [False] * len(macros)
+
     for p in range(max_passes):
-        if placement_is_legal(macros, canvas_w=canvas_w, canvas_h=canvas_h):
+        if placement_is_legal(
+            macros,
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+            hard_macro_count=hard_macro_count,
+        ):
             break
         passes_used = p + 1
 
         changed = False
-        for i in range(len(macros)):
-            for j in range(i + 1, len(macros)):
+        for i in range(hard_n):
+            for j in range(i + 1, hard_n):
                 if not rects_overlap(macros[i], macros[j]):
                     continue
                 a, b = macros[i], macros[j]
-                move = min_l1_separation_move_b(
-                    a, b, canvas_w=canvas_w, canvas_h=canvas_h
-                )
-                if move is not None:
-                    dx, dy = move
-                    b.x += dx
-                    b.y += dy
-                    clamp_macro_to_canvas(b, canvas_w=canvas_w, canvas_h=canvas_h)
+                a_fixed = bool(fixed_mask_local[i])
+                b_fixed = bool(fixed_mask_local[j])
+
+                # Move only non-fixed macros; fixed macros will be restored post-legalization,
+                # so moving them here would just undo progress.
+                moved = False
+                if not b_fixed:
+                    move = min_l1_separation_move_b(
+                        a, b, canvas_w=canvas_w, canvas_h=canvas_h
+                    )
+                    if move is not None:
+                        dx, dy = move
+                        b.x += dx
+                        b.y += dy
+                        clamp_macro_to_canvas(b, canvas_w=canvas_w, canvas_h=canvas_h)
+                        moved = True
+                if not moved and (b_fixed and not a_fixed):
+                    # b is fixed, try moving a instead (deterministically).
+                    move = min_l1_separation_move_b(
+                        b, a, canvas_w=canvas_w, canvas_h=canvas_h
+                    )
+                    if move is not None:
+                        dx, dy = move
+                        a.x += dx
+                        a.y += dy
+                        clamp_macro_to_canvas(a, canvas_w=canvas_w, canvas_h=canvas_h)
+                        moved = True
+
+                if moved:
                     resolved_ops += 1
                     changed = True
                 else:
-                    _fallback_separate_pair(a, b, canvas_w=canvas_w, canvas_h=canvas_h)
-                    if not rects_overlap(a, b):
-                        resolved_ops += 1
-                        changed = True
+                    if not b_fixed:
+                        _fallback_separate_pair(a, b, canvas_w=canvas_w, canvas_h=canvas_h)
+                        if not rects_overlap(a, b):
+                            resolved_ops += 1
+                            changed = True
+                    elif not a_fixed:
+                        _fallback_separate_pair(b, a, canvas_w=canvas_w, canvas_h=canvas_h)
+                        if not rects_overlap(a, b):
+                            resolved_ops += 1
+                            changed = True
 
         if not changed:
             break
 
     remaining = count_overlapping_pairs(macros)
-    legal = placement_is_legal(macros, canvas_w=canvas_w, canvas_h=canvas_h)
+    remaining = count_overlapping_pairs(macros, hard_macro_count=hard_macro_count)
+    legal = placement_is_legal(
+        macros,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+        hard_macro_count=hard_macro_count,
+    )
     candidate.metadata["legal"] = legal
     candidate.metadata["legality_status"] = "legal" if legal else "illegal"
     candidate.metadata["legalization_passes"] = passes_used

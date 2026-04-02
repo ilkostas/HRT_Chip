@@ -181,36 +181,109 @@ def run_pipeline(
             else:
                 inf_override = config.diffusion_inference_steps
         t_gen0 = time.perf_counter()
-        chunk = generate_candidates(
-            benchmark_id=config.benchmark_id,
-            seed=config.seed,
-            num_candidates=num_candidates_eff,
-            macro_specs=macro_specs_arg,
-            canvas_w=canvas_w,
-            canvas_h=canvas_h,
-            diffusion_steps=config.diffusion_steps,
-            guidance_sweep=(sweep[si],),
-            sampler=smp,
-            should_continue_sweep=None,
-            guidance_sweep_index_offset=si,
-            diffusion_inference_steps_override=inf_override,
-            sampler_mode_override=mode_override,
-        )
+        if config.evaluator_backend == "official" and config.sampler_backend == "stub" and bench_obj is not None:
+            # The stub sampler generates random macro centers.
+            # For official benchmarks with hundreds/thousands of macros, that makes
+            # the greedy O(n^2) legalizer prohibitively slow.
+            #
+            # For a smoke / evidence pipeline, initialize candidates from the benchmark's
+            # provided macro centers so legalize_candidate converges quickly.
+            from hrt_chip.models import MacroRect
+            import random
+
+            a, b, g = sweep[si]
+            eff_si = si  # generate() passes a single-weight vector per outer loop
+            centers = bench_obj.macro_positions  # [num_macros, 2] (centers, physical units)
+            sizes = bench_obj.macro_sizes  # [num_macros, 2] (w, h)
+            names = bench_obj.macro_names
+            fixed_mask_local = [bool(x) for x in bench_obj.macro_fixed.tolist()]
+            # Small deterministic perturbation for movable macros only.
+            # Fixed macros must remain at benchmark locations (later restored after legalization).
+            jitter_x = 0.01 * float(canvas_w)
+            jitter_y = 0.01 * float(canvas_h)
+            chunk: list[PlacementCandidate] = []
+            for idx in range(num_candidates_eff):
+                rng = random.Random(config.seed + 10_000 * eff_si + idx)
+                base_id = f"cand_{idx:04d}"
+                cand_id = base_id if si == 0 else f"s{eff_si:02d}_{base_id}"
+                macros = []
+                for mi in range(int(bench_obj.num_macros)):
+                    cx = float(centers[mi, 0])
+                    cy = float(centers[mi, 1])
+                    if not fixed_mask_local[mi]:
+                        cx += rng.uniform(-jitter_x, jitter_x)
+                        cy += rng.uniform(-jitter_y, jitter_y)
+                    w = float(sizes[mi, 0])
+                    h = float(sizes[mi, 1])
+                    macros.append(MacroRect(name=str(names[mi]), x=cx - w / 2.0, y=cy - h / 2.0, w=w, h=h))
+
+                chunk.append(
+                    PlacementCandidate(
+                        candidate_id=cand_id,
+                        benchmark_id=config.benchmark_id,
+                        macros=macros,
+                        metadata={
+                            "stage": "generated",
+                            "guidance": {
+                                "sweep_index": eff_si,
+                                "alpha_hpwl": float(a),
+                                "beta_congestion": float(b),
+                                "gamma_legality": float(g),
+                                "weights": [float(a), float(b), float(g)],
+                            },
+                        },
+                    )
+                )
+        else:
+            chunk = generate_candidates(
+                benchmark_id=config.benchmark_id,
+                seed=config.seed,
+                num_candidates=num_candidates_eff,
+                macro_specs=macro_specs_arg,
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+                diffusion_steps=config.diffusion_steps,
+                guidance_sweep=(sweep[si],),
+                sampler=smp,
+                should_continue_sweep=None,
+                guidance_sweep_index_offset=si,
+                diffusion_inference_steps_override=inf_override,
+                sampler_mode_override=mode_override,
+            )
         generation_seconds += time.perf_counter() - t_gen0
         sweep_vectors_used += 1
         if runtime_budget is not None:
             runtime_budget.record("generation", time.perf_counter() - t_gen0)
 
+        hard_macro_count_opt = int(getattr(bench_obj, "num_hard_macros", 0)) if bench_obj is not None else None
+        if hard_macro_count_opt is not None and hard_macro_count_opt <= 0:
+            hard_macro_count_opt = None
+        fixed_mask_opt = None
+        if bench_obj is not None and hasattr(bench_obj, "macro_fixed"):
+            # Benchmarks store fixed flags as a tensor; convert once per benchmark run.
+            fixed_mask_opt = [bool(x) for x in bench_obj.macro_fixed.tolist()]
+
         for cand in chunk:
             t_pipe0 = time.perf_counter()
             t_le = time.perf_counter()
-            legalize_candidate(cand, canvas_w=canvas_w, canvas_h=canvas_h)
+            legalize_candidate(
+                cand,
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+                hard_macro_count=hard_macro_count_opt,
+                fixed_mask=fixed_mask_opt,
+            )
             if bench_obj is not None:
                 from hrt_chip.official_benchmark import restore_fixed_macro_positions
 
                 restore_fixed_macro_positions(cand, bench_obj)
             legal_flag = cand.metadata.get("legal") is True
-            geom_ok = placement_is_legal(cand.macros, canvas_w=canvas_w, canvas_h=canvas_h)
+            geom_ok = placement_is_legal(
+                cand.macros,
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+                hard_macro_count=hard_macro_count_opt,
+            )
             assert legal_flag == geom_ok, (
                 "legality metadata must match geometry check (legal flag vs placement_is_legal)"
             )

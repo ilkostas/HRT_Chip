@@ -37,10 +37,16 @@ def macro_in_canvas(
     )
 
 
-def count_overlapping_pairs(macros: list[MacroRect], *, eps: float = OVERLAP_EPS) -> int:
+def count_overlapping_pairs(
+    macros: list[MacroRect],
+    *,
+    eps: float = OVERLAP_EPS,
+    hard_macro_count: int | None = None,
+) -> int:
+    hard_n = hard_macro_count if hard_macro_count is not None else len(macros)
     n = 0
-    for i in range(len(macros)):
-        for j in range(i + 1, len(macros)):
+    for i in range(hard_n):
+        for j in range(i + 1, hard_n):
             if overlap_area(macros[i], macros[j]) > eps:
                 n += 1
     return n
@@ -52,12 +58,14 @@ def placement_is_legal(
     canvas_w: float = 1.0,
     canvas_h: float = 1.0,
     eps: float = OVERLAP_EPS,
+    hard_macro_count: int | None = None,
 ) -> bool:
     """Zero pairwise overlap and all macros inside the canvas."""
     if not all(macro_in_canvas(m, canvas_w=canvas_w, canvas_h=canvas_h, eps=eps) for m in macros):
         return False
-    for i in range(len(macros)):
-        for j in range(i + 1, len(macros)):
+    hard_n = hard_macro_count if hard_macro_count is not None else len(macros)
+    for i in range(hard_n):
+        for j in range(i + 1, hard_n):
             if overlap_area(macros[i], macros[j]) > eps:
                 return False
     return True

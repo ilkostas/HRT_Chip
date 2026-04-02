@@ -31,7 +31,15 @@ class MixedSizeEstimateBackend(MixedSizeBackend):
     def run(self, request: MixedSizeRequest) -> MixedSizeResult:
         t0 = time.perf_counter()
         macros = list(request.fixed_macros)
-        if not placement_is_legal(macros, canvas_w=request.canvas_w, canvas_h=request.canvas_h):
+        hard_macro_count = None
+        if request.benchmark is not None and hasattr(request.benchmark, "num_hard_macros"):
+            hard_macro_count = int(getattr(request.benchmark, "num_hard_macros"))
+        if not placement_is_legal(
+            macros,
+            canvas_w=request.canvas_w,
+            canvas_h=request.canvas_h,
+            hard_macro_count=hard_macro_count if hard_macro_count and hard_macro_count > 0 else None,
+        ):
             return MixedSizeResult(
                 ok=False,
                 message="rejected: illegal macro geometry for mixed-size estimate",
