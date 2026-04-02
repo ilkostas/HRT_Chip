@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch_geometric.data import Batch, Data
@@ -108,6 +109,10 @@ class PyTorchDDPMSampler:
                 "gamma_legality": gu.gamma_legality,
             }
 
+        objective_bias_dict: dict[str, Any] | None = None
+        if request.objective_bias is not None:
+            objective_bias_dict = request.objective_bias.to_dict()
+
         prov = SamplerProvenance(
             sampler_name=self.sampler_name,
             model_stub=f"pytorch_checkpoint:{self.checkpoint_path.name}",
@@ -117,6 +122,7 @@ class PyTorchDDPMSampler:
             num_candidates=request.num_candidates,
             diffusion_steps=eff_steps,
             guidance=guidance_dict,
+            objective_bias=objective_bias_dict,
             checkpoint_path=str(self.checkpoint_path.resolve()),
             training_dataset_version=self.training_dataset_version,
             model_architecture=self.model_architecture,

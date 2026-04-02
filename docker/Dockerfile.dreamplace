@@ -1,0 +1,9 @@
+# Analytical proxy for the mixed-size Docker contract (/work input.json -> output.json).
+# Operators can replace this layer with a CUDA DREAMPlace + hMETIS image; keep the same paths.
+FROM python:3.11-slim
+
+COPY dreamplace_flow /opt/dreamplace_flow
+RUN chmod +x /opt/dreamplace_flow/entrypoint.sh
+
+WORKDIR /work
+ENTRYPOINT ["/opt/dreamplace_flow/entrypoint.sh"]

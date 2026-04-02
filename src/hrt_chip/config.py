@@ -32,8 +32,11 @@ EvaluatorBackend = Literal["stub", "official"]
 # Phase 6: how many per-candidate JSON files to keep on disk after a run.
 ArtifactRetentionMode = Literal["full", "compact", "best_only"]
 
-# Mixed-size handoff: stub (no-op) vs analytical estimate (utilization + RUDY proxy).
-MixedSizeBackendName = Literal["stub", "estimate"]
+# Mixed-size handoff: stub, analytical estimate, Docker analytical proxy, or real toolchain image.
+MixedSizeBackendName = Literal["stub", "estimate", "dreamplace", "dreamplace_real"]
+
+# Final candidate ordering within a run (default preserves proxy-first Tier-1 style).
+SelectionPolicy = Literal["proxy_first", "ppa_priority"]
 
 # Synthetic dataset curriculum (Phase 4+).
 SyntheticCurriculum = Literal["grid_v1", "benchmark_like"]
@@ -176,7 +179,34 @@ class RunConfig:
     """If set, shrink guidance sweep / per-vector candidate count to fit this wall-clock budget."""
 
     mixed_size_backend: MixedSizeBackendName = "estimate"
-    """``stub``: no-op success; ``estimate``: utilization + RUDY proxy (no DREAMPlace binary)."""
+    """``stub``: no-op; ``estimate``: utilization + RUDY; ``dreamplace`` / ``dreamplace_real``: Docker ``/work`` flow."""
+
+    selection_policy: SelectionPolicy = "proxy_first"
+    """``proxy_first``: rank by evaluator proxy (tie-break mixed-size composite). ``ppa_priority``: rank legal+ms-ok by composite first."""
+
+    dreamplace_docker_image: str = "hrt-chip-dreamplace:local"
+    """Image for ``mixed_size_backend=dreamplace`` (override env ``HRT_DREAMPLACE_IMAGE`` at runtime in adapter)."""
+
+    dreamplace_real_docker_image: str = "hrt-chip-dreamplace-real:local"
+    """Image for ``mixed_size_backend=dreamplace_real`` (env ``HRT_DREAMPLACE_REAL_IMAGE``)."""
+
+    dreamplace_docker_timeout_seconds: int = 300
+    """Per-candidate ``docker run`` timeout."""
+
+    dreamplace_real_docker_timeout_seconds: int = 900
+    """Per-candidate timeout for ``dreamplace_real`` (env ``HRT_DREAMPLACE_REAL_TIMEOUT``)."""
+
+    dreamplace_docker_retries: int = 0
+    """Retry count on transient Docker failures (0 = no retry)."""
+
+    dreamplace_mount_testcase: bool = True
+    """Mount ICCAD04 testcase dir read-only at ``/testcase`` in the container when using dreamplace backend."""
+
+    dreamplace_docker_extra_args: str | None = None
+    """Extra ``docker run`` args (quoted space-separated), e.g. ``-v /path/to/hmetis:/tools/hmetis:ro``."""
+
+    dreamplace_docker_executable: str = "docker"
+    """Docker CLI executable (``docker`` or full path; on Windows often ``docker`` from PATH)."""
 
     diffusion_inference_steps: int | None = None
     """Optional cap on reverse-diffusion steps for ``pytorch_checkpoint`` sampler (accelerated sampling)."""
@@ -199,8 +229,17 @@ class RunConfig:
             d["testcase_root"] = None
         d["wall_clock_budget_seconds"] = self.wall_clock_budget_seconds
         d["mixed_size_backend"] = self.mixed_size_backend
+        d["selection_policy"] = self.selection_policy
         d["diffusion_inference_steps"] = self.diffusion_inference_steps
         d["trends_log_path"] = self.trends_log_path
+        d["dreamplace_docker_image"] = self.dreamplace_docker_image
+        d["dreamplace_real_docker_image"] = self.dreamplace_real_docker_image
+        d["dreamplace_docker_timeout_seconds"] = self.dreamplace_docker_timeout_seconds
+        d["dreamplace_real_docker_timeout_seconds"] = self.dreamplace_real_docker_timeout_seconds
+        d["dreamplace_docker_retries"] = self.dreamplace_docker_retries
+        d["dreamplace_mount_testcase"] = self.dreamplace_mount_testcase
+        d["dreamplace_docker_extra_args"] = self.dreamplace_docker_extra_args
+        d["dreamplace_docker_executable"] = self.dreamplace_docker_executable
         return d
 
     @classmethod
@@ -231,6 +270,15 @@ class RunConfig:
         out.setdefault("artifact_retention_top_k", None)
         out.setdefault("wall_clock_budget_seconds", None)
         out.setdefault("mixed_size_backend", "estimate")
+        out.setdefault("selection_policy", "proxy_first")
         out.setdefault("diffusion_inference_steps", None)
         out.setdefault("trends_log_path", None)
+        out.setdefault("dreamplace_docker_image", "hrt-chip-dreamplace:local")
+        out.setdefault("dreamplace_real_docker_image", "hrt-chip-dreamplace-real:local")
+        out.setdefault("dreamplace_docker_timeout_seconds", 300)
+        out.setdefault("dreamplace_real_docker_timeout_seconds", 900)
+        out.setdefault("dreamplace_docker_retries", 0)
+        out.setdefault("dreamplace_mount_testcase", True)
+        out.setdefault("dreamplace_docker_extra_args", None)
+        out.setdefault("dreamplace_docker_executable", "docker")
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})

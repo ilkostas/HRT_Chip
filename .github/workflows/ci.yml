@@ -28,7 +28,7 @@ jobs:
           set -e
           SMOKE_ROOT="${RUNNER_TEMP}/hrt_chip_smoke"
           mkdir -p "$SMOKE_ROOT"
-          uv run hrt-chip run --benchmark ibm01 --seed 1 --candidates 2 --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run
+          uv run hrt-chip run --benchmark ibm01 --seed 1 --candidates 2 --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run --mixed-size-backend stub
           uv run hrt-chip replay "$SMOKE_ROOT/phase6-smoke-run/manifest.json" --verify
 
       - name: Stub sweep regression (Gate A + trends JSONL)

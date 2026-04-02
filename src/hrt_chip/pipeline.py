@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from typing import Any
 
-from hrt_chip.adapters.evaluator.base import EvaluationResult, EvaluatorAdapter
+from hrt_chip.adapters.evaluator.base import EvaluatorAdapter
 from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
+from hrt_chip.adapters.mixed_size.dreamplace_docker import (
+    REAL_DOCKER_VARIANT,
+    DreamPlaceDockerBackend,
+)
 from hrt_chip.adapters.mixed_size.estimate import MixedSizeEstimateBackend
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
 from hrt_chip.benchmarks import default_testcase_root
@@ -17,7 +22,9 @@ from hrt_chip.config import RunConfig, resolved_guidance_sweep
 from hrt_chip.deterministic_runtime import apply_pipeline_determinism
 from hrt_chip.diffusion import DiffusionSampler
 from hrt_chip.geometry import placement_is_legal
-from hrt_chip.guidance import compute_objectives_for_candidate
+from hrt_chip.guidance import composite_guidance_objective, compute_objectives_for_candidate
+from hrt_chip import mixed_size_metrics as msm
+from hrt_chip.rank_metrics import kendall_tau, spearman_rho, surrogate_good_proxy_bad_quartiles
 from hrt_chip.io.artifacts import (
     PipelineArtifacts,
     apply_candidate_retention,
@@ -62,6 +69,10 @@ def _resolve_sampler(config: RunConfig, sampler: DiffusionSampler | None) -> Dif
 def _resolve_mixed_size_backend(config: RunConfig) -> MixedSizeBackend:
     if config.mixed_size_backend == "stub":
         return LocalStubMixedSizeBackend()
+    if config.mixed_size_backend == "dreamplace":
+        return DreamPlaceDockerBackend(config)
+    if config.mixed_size_backend == "dreamplace_real":
+        return DreamPlaceDockerBackend(config, variant=REAL_DOCKER_VARIANT)
     return MixedSizeEstimateBackend()
 
 
@@ -78,7 +89,9 @@ def run_pipeline(
 
     Illegal macro placements skip mixed-size handoff and receive infinite proxy from the evaluator.
 
-    Final best candidate is always the argmin of official proxy score (Tier-1 selection).
+    Default ``selection_policy`` is ``proxy_first`` (proxy primary, mixed-size composite tie-break).
+    ``ppa_priority`` ranks legal candidates with successful mixed-size backend by composite placement
+    metrics first, then proxy.
 
     Returns structured dict suitable for JSON serialization and CLI display.
     """
@@ -106,6 +119,11 @@ def run_pipeline(
     artifacts = PipelineArtifacts(run_dir=config.output_dir / manifest.run_id)
     artifacts.ensure_dirs()
     manifest.write_json(artifacts.manifest_path)
+
+    mixed_size_work_root: Path | None = None
+    if config.mixed_size_backend in ("dreamplace", "dreamplace_real"):
+        mixed_size_work_root = artifacts.run_dir / "mixed_size"
+        mixed_size_work_root.mkdir(parents=True, exist_ok=True)
 
     run_context: dict[str, Any] = {
         "seed": config.seed,
@@ -138,8 +156,7 @@ def run_pipeline(
 
     evaluations: list[dict[str, Any]] = []
     scoring_table: list[dict[str, Any]] = []
-    best: EvaluationResult | None = None
-    best_candidate_id: str | None = None
+    alignment_scratch: list[dict[str, Any]] = []
 
     legalize_eval_seconds = 0.0
     for cand in raw:
@@ -162,6 +179,9 @@ def run_pipeline(
                 benchmark=bench_obj,
                 canvas_w=canvas_w,
                 canvas_h=canvas_h,
+                candidate_id=cand.candidate_id,
+                work_dir_host=mixed_size_work_root,
+                testcase_root_host=Path(testcase_path),
             )
             ms_result = ms.run(req)
             ms.attach_to_candidate(cand, ms_result)
@@ -193,7 +213,7 @@ def run_pipeline(
             "candidate_id": er.candidate_id,
             "proxy_score": er.proxy_score,
             "legal": er.legal,
-            "details": er.details,
+            "details": dict(er.details),
         }
         evaluations.append(row)
 
@@ -207,20 +227,88 @@ def run_pipeline(
             }
         )
 
-        cand_path = artifacts.candidates_dir / f"{cand.candidate_id}.json"
-        write_json(cand_path, cand.to_dict())
-
-        if best is None or er.proxy_score < best.proxy_score:
-            best = er
-            best_candidate_id = er.candidate_id
-
-    ranking = sorted(evaluations, key=lambda r: r["proxy_score"])
-    if ranking:
-        assert best_candidate_id == ranking[0]["candidate_id"], (
-            "best_candidate_id must be argmin(proxy_score)"
+        a_w = float(guidance_meta.get("alpha_hpwl", 1.0 / 3.0))
+        b_w = float(guidance_meta.get("beta_congestion", 1.0 / 3.0))
+        g_w = float(guidance_meta.get("gamma_legality", 1.0 / 3.0))
+        comp = composite_guidance_objective(
+            objs, alpha_hpwl=a_w, beta_congestion=b_w, gamma_legality=g_w
         )
-        assert best is not None
-        assert ranking[0]["proxy_score"] == best.proxy_score
+        alignment_scratch.append(
+            {
+                "candidate_id": er.candidate_id,
+                "proxy_score": er.proxy_score,
+                "legal": er.legal,
+                "composite": comp,
+            }
+        )
+
+    ms_rows: list[dict[str, Any]] = []
+    for cand, ev in zip(raw, evaluations, strict=True):
+        ms = cand.metadata.get("mixed_size") or {}
+        extra = ms.get("extra") if isinstance(ms.get("extra"), dict) else {}
+        ms_rows.append(
+            {
+                "candidate_id": cand.candidate_id,
+                "legal": ev["legal"],
+                "ms_ok": ms.get("ok") is True,
+                "ms_extra": extra,
+            }
+        )
+    profiles = msm.build_mixed_size_profiles_for_candidates(ms_rows)
+
+    for ev, cand in zip(evaluations, raw, strict=True):
+        prof = profiles.get(ev["candidate_id"], {})
+        ev["mixed_size_profile"] = prof
+        ev["details"]["mixed_size_profile"] = prof
+
+    for st, cand in zip(scoring_table, raw, strict=True):
+        st["mixed_size_profile"] = profiles.get(st["candidate_id"], {})
+
+    for cand in raw:
+        prof = profiles.get(cand.candidate_id, {})
+        ms_slot = cand.metadata.setdefault("mixed_size", {})
+        if isinstance(ms_slot, dict):
+            ms_slot["profile"] = prof
+        write_json(artifacts.candidates_dir / f"{cand.candidate_id}.json", cand.to_dict())
+
+    policy = config.selection_policy
+    key_fn = msm.ranking_key_proxy_first if policy == "proxy_first" else msm.ranking_key_ppa_priority
+    ranking = sorted(evaluations, key=key_fn)
+    best_candidate_id: str | None = ranking[0]["candidate_id"] if ranking else None
+    best_proxy_score: float | None = ranking[0]["proxy_score"] if ranking else None
+
+    if ranking and policy == "proxy_first":
+        proxy_sorted = sorted(evaluations, key=msm.ranking_key_proxy_first)
+        assert [r["candidate_id"] for r in ranking] == [r["candidate_id"] for r in proxy_sorted], (
+            "proxy_first ranking must match stable proxy-first sort"
+        )
+
+    filtered_ids: list[str] = []
+    filtered_composites: list[float] = []
+    filtered_proxies: list[float] = []
+    for row in alignment_scratch:
+        if not row["legal"]:
+            continue
+        ps = row["proxy_score"]
+        if not isinstance(ps, (int, float)) or not math.isfinite(float(ps)):
+            continue
+        if row["composite"] is None:
+            continue
+        filtered_ids.append(str(row["candidate_id"]))
+        filtered_composites.append(float(row["composite"]))
+        filtered_proxies.append(float(ps))
+
+    spear = spearman_rho(filtered_composites, filtered_proxies)
+    kend = kendall_tau(filtered_composites, filtered_proxies)
+    mismatch = surrogate_good_proxy_bad_quartiles(filtered_ids, filtered_composites, filtered_proxies)
+
+    surrogate_proxy_alignment: dict[str, Any] = {
+        "n_candidates_total": len(alignment_scratch),
+        "n_used_for_correlation": len(filtered_ids),
+        "spearman_rho": spear,
+        "kendall_tau": kend,
+        "surrogate_good_proxy_bad": mismatch,
+    }
 
     sampler_provenance: dict[str, Any] | None = None
     if raw:
@@ -244,8 +332,19 @@ def run_pipeline(
         or (sampler_provenance or {}).get("training_dataset_version"),
         "ranking": ranking,
         "scoring_table": scoring_table,
+        "surrogate_proxy_alignment": surrogate_proxy_alignment,
         "best_candidate_id": best_candidate_id,
-        "best_proxy_score": best.proxy_score if best else None,
+        "best_proxy_score": best_proxy_score,
+        "selection_policy": config.selection_policy,
+        "selection_rationale": {
+            "policy": config.selection_policy,
+            "ranking_key": "proxy_first" if policy == "proxy_first" else "ppa_priority",
+            "mixed_size_weights": {
+                "density": msm.WEIGHT_DENSITY,
+                "congestion": msm.WEIGHT_CONGESTION,
+                "runtime": msm.WEIGHT_RUNTIME,
+            },
+        },
         "evaluations": evaluations,
         "mixed_size_backend": config.mixed_size_backend,
         "budget_resolution": {

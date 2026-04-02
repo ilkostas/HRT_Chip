@@ -24,7 +24,7 @@ uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 4 --output-dir runs
 SMOKE_ROOT=/tmp/hrt_chip_smoke   # or $env:TEMP\hrt_chip_smoke on PowerShell
 mkdir -p "$SMOKE_ROOT"           # PowerShell: New-Item -ItemType Directory -Force
 uv run hrt-chip run --benchmark ibm01 --seed 1 --candidates 2 \
-  --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run
+  --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run --mixed-size-backend stub
 uv run hrt-chip replay "$SMOKE_ROOT/phase6-smoke-run/manifest.json" --verify
 
 uv run hrt-chip benchmark-sweep --evaluator stub --benchmark ibm01 --benchmark ibm02 \
@@ -35,7 +35,7 @@ uv run hrt-chip benchmark-sweep --evaluator stub --benchmark ibm01 --benchmark i
 
 1. Generate candidate macro coordinates with a **joint** diffusion-style process (stub or trained checkpoint).
 2. Enforce **hard legality** via overlap-aware signals plus a **greedy legalizer** (continuous geometry).
-3. Explore multi-objective trade-offs at inference (guidance weight sweep + surrogate **scoring table**); **Tier-1 selection** is always **argmin official proxy** after legalization.
+3. Explore multi-objective trade-offs at inference (guidance weight sweep + surrogate **scoring table**); default **selection** is **proxy-first** (official proxy primary, mixed-size composite tie-break). Optional **`--selection-policy ppa_priority`** ranks mixed-size metrics ahead of proxy for exploration.
 
 Full methodology: [`docs/proposed-solution-overview.md`](docs/proposed-solution-overview.md), [`docs/step1-diffusion-model.md`](docs/step1-diffusion-model.md), [`docs/step2-position-masking.md`](docs/step2-position-masking.md), [`docs/step3-multi-objective-proxy-to-ppa.md`](docs/step3-multi-objective-proxy-to-ppa.md).
 
@@ -52,7 +52,7 @@ Practical rules summary: [`docs/macro-placement-competition.md`](docs/macro-plac
 
 | Area | Summary |
 |------|---------|
-| **Pipeline** | `run_pipeline` in [`src/hrt_chip/pipeline.py`](src/hrt_chip/pipeline.py): generate → legalize → mixed-size stub → evaluate; **best_candidate_id = argmin(proxy_score)**. |
+| **Pipeline** | `run_pipeline` in [`src/hrt_chip/pipeline.py`](src/hrt_chip/pipeline.py): generate → legalize → mixed-size → evaluate; **default** `best_candidate_id` from **proxy-first** ranking; optional **ppa_priority**. |
 | **Sampling** | `DiffusionSampler` + `DeterministicDDPMStubSampler`; normalized centers **`[-1, 1]`**; optional **`pytorch_checkpoint`** ([`adapters/diffusion/pytorch_sampler.py`](src/hrt_chip/adapters/diffusion/pytorch_sampler.py)). |
 | **Legality** | Geometry + greedy legalizer ([`geometry.py`](src/hrt_chip/geometry.py), [`stages/legalize.py`](src/hrt_chip/stages/legalize.py)). |
 | **Guidance (Phase 3)** | Presets / `--guidance-weight` sweep, surrogates + `scoring_table` in `results.json` ([`guidance.py`](src/hrt_chip/guidance.py)). |
@@ -60,7 +60,35 @@ Practical rules summary: [`docs/macro-placement-competition.md`](docs/macro-plac
 | **Benchmarks (Phase 5)** | `benchmark-sweep` over **17 IBM** designs, `sweep_report.json`, Gate A/B/C vs aggregate SA / RePlAce ([`benchmarks.py`](src/hrt_chip/benchmarks.py), [`benchmark_sweep.py`](src/hrt_chip/benchmark_sweep.py)). |
 | **Repro (Phase 6)** | Deterministic seeding, `--deterministic-verification`, `replay --verify` → `replay_verification.json`, artifact retention ([`deterministic_runtime.py`](src/hrt_chip/deterministic_runtime.py), [`replay_verify.py`](src/hrt_chip/replay_verify.py), [`io/artifacts.py`](src/hrt_chip/io/artifacts.py)). |
 
-**Adapters:** evaluator **stub** (default) or **official** ([`adapters/evaluator/`](src/hrt_chip/adapters/evaluator/)); mixed-size **stub** only today ([`adapters/mixed_size/`](src/hrt_chip/adapters/mixed_size/)). Integration details: [`docs/integration-notes.md`](docs/integration-notes.md).
+**Adapters:** evaluator **stub** (default) or **official** ([`adapters/evaluator/`](src/hrt_chip/adapters/evaluator/)); mixed-size **stub**, **estimate** (default CLI), or **dreamplace** (Docker `/work` JSON contract; see below) ([`adapters/mixed_size/`](src/hrt_chip/adapters/mixed_size/)). Integration details: [`docs/integration-notes.md`](docs/integration-notes.md).
+
+### Mixed-size: DREAMPlace Docker (optional)
+
+1. Install **Docker Desktop** (Windows/macOS/Linux). Ensure `docker` is on `PATH`.
+2. Build the default image (analytical proxy that satisfies the JSON contract; swap for a real DREAMPlace+hMETIS image later):
+
+   ```powershell
+   # Windows (PowerShell, from repo root)
+   .\scripts\build_dreamplace_image.ps1
+   ```
+
+   ```bash
+   # Linux/macOS
+   bash scripts/build_dreamplace_image.sh
+   ```
+
+3. Run the pipeline with **`--mixed-size-backend dreamplace`** (use **`--evaluator stub`** if you do not have ICCAD04 testcases):
+
+   ```bash
+   uv run hrt-chip run --benchmark ibm01 --candidates 1 --evaluator stub \
+     --mixed-size-backend dreamplace --no-dreamplace-mount-testcase
+   ```
+
+   Per-candidate artifacts land under **`runs/<run_id>/mixed_size/<candidate_id>/`** (`input.json`, `output.json`, `docker.log`, `host_summary.json`).
+
+**Env overrides:** `HRT_DREAMPLACE_IMAGE`, `HRT_DREAMPLACE_TIMEOUT`, `HRT_DOCKER_EXECUTABLE`. For **`dreamplace_real`:** `HRT_DREAMPLACE_REAL_IMAGE`, `HRT_DREAMPLACE_REAL_TIMEOUT`.
+
+**Troubleshooting (Windows):** share the drive containing the repo in Docker Desktop; avoid non-ASCII paths; if bind mounts fail, try `WSL2` backend and run from a Linux path under `\\wsl$\...`. Full notes: [`docs/integration-notes.md`](docs/integration-notes.md).
 
 ## CLI commands
 
@@ -78,6 +106,8 @@ All entrypoints: **`hrt-chip`** ([`src/hrt_chip/cli.py`](src/hrt_chip/cli.py)) o
 
 - **`--sampler-backend stub`** (default) or **`pytorch_checkpoint`** + **`--checkpoint path/to/checkpoint.pt`**
 - **`--evaluator stub`** (default) or **`official`** + testcase tree (see below)
+- **`--mixed-size-backend stub|estimate|dreamplace|dreamplace_real`** plus optional **`--dreamplace-*`** / **`--dreamplace-real-*`** flags (see integration notes)
+- **`--selection-policy proxy_first`** (default) or **`ppa_priority`**
 - **`--guidance-preset pareto3`** or repeat **`--guidance-weight α,β,γ`** (HPWL, congestion, legality surrogates); `num_candidates` is **per** weight vector
 - **Phase 6:** `--deterministic-verification`, `--artifact-retention full|compact|best_only`, `--artifact-retention-top-k K`
 
@@ -133,7 +163,7 @@ uv run hrt-chip run --benchmark ibm01 --artifact-retention best_only --output-di
 ### Competition hardening (surrogates, budget, trends)
 
 - **`results.json` schema:** `results_schema_version` and required keys are documented in [`docs/baseline-artifacts.md`](docs/baseline-artifacts.md); validate with [`src/hrt_chip/io/baseline_schema.py`](src/hrt_chip/io/baseline_schema.py).
-- **Surrogates:** with `--evaluator official`, scoring-table HPWL/congestion use **LogSumExp net HPWL** and **RUDY-style** demand when a `macro_place` `Benchmark` is loaded; stub runs keep bbox/grid fallbacks.
+- **Surrogates:** with `--evaluator official`, scoring-table HPWL/congestion use **exact pin-group HPWL** and **RUDY over pin bboxes** when the `Benchmark` exposes `net_pin_dx` / `net_pin_dy` (aligned with `net_nodes`); otherwise `phi_hpwl`/`phi_congestion` are `null` and `surrogate_mode` is `netlist_pins_missing`. Legality splits **hard overlap pair count** vs **smooth squared-overlap penalty**. `results.json` includes **`surrogate_proxy_alignment`** (Spearman/Kendall vs weighted surrogate composite). Stub runs keep bbox/grid fallbacks.
 - **Mixed-size:** default **`--mixed-size-backend estimate`** (macro utilization + RUDY proxy + timing); use **`stub`** for no-op CI/smoke.
 - **Budget:** optional **`--wall-clock-budget-seconds`** shrinks per-vector candidate count or the guidance sweep (see [`src/hrt_chip/budget.py`](src/hrt_chip/budget.py)).
 - **Accelerated DDPM inference:** **`--diffusion-inference-steps`** (with `--sampler-backend pytorch_checkpoint`) subsamples reverse timesteps.
@@ -195,7 +225,7 @@ Details: [`docs/integration-notes.md`](docs/integration-notes.md).
 
 ## Roadmap — what is still open
 
-- **Mixed-size / standard cells:** wire a real placer (e.g. DREAMPlace / hMETIS) behind [`MixedSizeBackend`](src/hrt_chip/adapters/mixed_size/base.py); **estimate** backend is analytical-only.
+- **Mixed-size / standard cells:** use **`dreamplace_real`** + a production image (or **`HRT_DREAMPLACE_REAL_IMAGE`**) behind [`MixedSizeBackend`](src/hrt_chip/adapters/mixed_size/base.py); **estimate** remains analytical-only.
 - **Model & data:** scale synthetic data and training quality toward strong competition proxies; **differentiable DDPM guidance** on ε / x̂₀ (Phase 3 today is sweep + surrogates + proxy selection only).
 - **Handoff / Tier 2:** NG45-oriented export or validation path for downstream OpenROAD-style flows.
 

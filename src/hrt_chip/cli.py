@@ -23,6 +23,7 @@ from hrt_chip.config import (
     MixedSizeBackendName,
     RunConfig,
     SamplerBackend,
+    SelectionPolicy,
     SyntheticCurriculum,
     SyntheticDatasetConfig,
     TrainingConfig,
@@ -146,7 +147,52 @@ def run(
     mixed_size_backend: str = typer.Option(
         "estimate",
         "--mixed-size-backend",
-        help="stub (no-op) or estimate (utilization + RUDY proxy; default estimate).",
+        help="stub | estimate | dreamplace | dreamplace_real (Docker; see docs/integration-notes.md).",
+    ),
+    selection_policy: str = typer.Option(
+        "proxy_first",
+        "--selection-policy",
+        help="proxy_first (default) or ppa_priority (mixed-size composite ranks legal ms-ok candidates first).",
+    ),
+    dreamplace_docker_image: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-image",
+        help="Override RunConfig image (default hrt-chip-dreamplace:local; env HRT_DREAMPLACE_IMAGE also works).",
+    ),
+    dreamplace_docker_timeout_seconds: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-timeout-seconds",
+        help="Per-candidate docker run timeout (default 300; env HRT_DREAMPLACE_TIMEOUT).",
+    ),
+    dreamplace_real_docker_image: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-real-docker-image",
+        help="Image for dreamplace_real (default hrt-chip-dreamplace-real:local; env HRT_DREAMPLACE_REAL_IMAGE).",
+    ),
+    dreamplace_real_docker_timeout_seconds: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-real-timeout-seconds",
+        help="Timeout for dreamplace_real (default 900; env HRT_DREAMPLACE_REAL_TIMEOUT).",
+    ),
+    dreamplace_docker_retries: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-retries",
+        help="Retries on non-zero docker exit (default 0).",
+    ),
+    dreamplace_mount_testcase: bool = typer.Option(
+        True,
+        "--dreamplace-mount-testcase/--no-dreamplace-mount-testcase",
+        help="Mount ICCAD04 testcase root at /testcase:ro in the container (dreamplace backend).",
+    ),
+    dreamplace_docker_extra_args: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-extra-args",
+        help="Extra docker run args (shell-quoted), e.g. extra -v mounts.",
+    ),
+    dreamplace_docker_executable: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-executable",
+        help="docker CLI name or path (default docker; env HRT_DOCKER_EXECUTABLE).",
     ),
     diffusion_inference_steps: Optional[int] = typer.Option(
         None,
@@ -164,8 +210,12 @@ def run(
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     if evaluator not in ("stub", "official"):
         raise typer.BadParameter("--evaluator must be stub or official")
-    if mixed_size_backend not in ("stub", "estimate"):
-        raise typer.BadParameter("--mixed-size-backend must be stub or estimate")
+    if mixed_size_backend not in ("stub", "estimate", "dreamplace", "dreamplace_real"):
+        raise typer.BadParameter(
+            "--mixed-size-backend must be stub, estimate, dreamplace, or dreamplace_real"
+        )
+    if selection_policy not in ("proxy_first", "ppa_priority"):
+        raise typer.BadParameter("--selection-policy must be proxy_first or ppa_priority")
     if artifact_retention not in ("full", "compact", "best_only"):
         raise typer.BadParameter("--artifact-retention must be full, compact, or best_only")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
@@ -190,8 +240,24 @@ def run(
         testcase_root=testcase_root,
         wall_clock_budget_seconds=wall_clock_budget_seconds,
         mixed_size_backend=cast(MixedSizeBackendName, mixed_size_backend),
+        selection_policy=cast(SelectionPolicy, selection_policy),
         diffusion_inference_steps=diffusion_inference_steps,
         trends_log_path=trends_log_path,
+        dreamplace_docker_image=dreamplace_docker_image or RunConfig.dreamplace_docker_image,
+        dreamplace_real_docker_image=dreamplace_real_docker_image
+        or RunConfig.dreamplace_real_docker_image,
+        dreamplace_docker_timeout_seconds=dreamplace_docker_timeout_seconds
+        if dreamplace_docker_timeout_seconds is not None
+        else RunConfig.dreamplace_docker_timeout_seconds,
+        dreamplace_real_docker_timeout_seconds=dreamplace_real_docker_timeout_seconds
+        if dreamplace_real_docker_timeout_seconds is not None
+        else RunConfig.dreamplace_real_docker_timeout_seconds,
+        dreamplace_docker_retries=dreamplace_docker_retries
+        if dreamplace_docker_retries is not None
+        else RunConfig.dreamplace_docker_retries,
+        dreamplace_mount_testcase=dreamplace_mount_testcase,
+        dreamplace_docker_extra_args=dreamplace_docker_extra_args,
+        dreamplace_docker_executable=dreamplace_docker_executable or RunConfig.dreamplace_docker_executable,
     )
     results = run_pipeline(cfg, run_id=run_id)
     _print_summary(results, cfg)
@@ -402,7 +468,52 @@ def benchmark_sweep_cmd(
     mixed_size_backend: str = typer.Option(
         "estimate",
         "--mixed-size-backend",
-        help="stub or estimate (default).",
+        help="stub | estimate | dreamplace | dreamplace_real (Docker per benchmark).",
+    ),
+    selection_policy: str = typer.Option(
+        "proxy_first",
+        "--selection-policy",
+        help="proxy_first (default) or ppa_priority.",
+    ),
+    dreamplace_docker_image: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-image",
+        help="Docker image for dreamplace mixed-size backend.",
+    ),
+    dreamplace_docker_timeout_seconds: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-timeout-seconds",
+        help="Per-candidate docker timeout for dreamplace backend.",
+    ),
+    dreamplace_real_docker_image: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-real-docker-image",
+        help="Docker image for dreamplace_real backend.",
+    ),
+    dreamplace_real_docker_timeout_seconds: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-real-timeout-seconds",
+        help="Per-candidate timeout for dreamplace_real.",
+    ),
+    dreamplace_docker_retries: Optional[int] = typer.Option(
+        None,
+        "--dreamplace-retries",
+        help="Docker retries (non-zero exit only) for dreamplace backend.",
+    ),
+    dreamplace_mount_testcase: bool = typer.Option(
+        True,
+        "--dreamplace-mount-testcase/--no-dreamplace-mount-testcase",
+        help="Mount testcase at /testcase:ro (dreamplace backend).",
+    ),
+    dreamplace_docker_extra_args: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-extra-args",
+        help="Extra docker run args for dreamplace backend.",
+    ),
+    dreamplace_docker_executable: Optional[str] = typer.Option(
+        None,
+        "--dreamplace-docker-executable",
+        help="docker executable for dreamplace backend.",
     ),
     diffusion_inference_steps: Optional[int] = typer.Option(
         None,
@@ -418,8 +529,12 @@ def benchmark_sweep_cmd(
     """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
     if evaluator not in ("stub", "official"):
         raise typer.BadParameter("--evaluator must be stub or official")
-    if mixed_size_backend not in ("stub", "estimate"):
-        raise typer.BadParameter("--mixed-size-backend must be stub or estimate")
+    if mixed_size_backend not in ("stub", "estimate", "dreamplace", "dreamplace_real"):
+        raise typer.BadParameter(
+            "--mixed-size-backend must be stub, estimate, dreamplace, or dreamplace_real"
+        )
+    if selection_policy not in ("proxy_first", "ppa_priority"):
+        raise typer.BadParameter("--selection-policy must be proxy_first or ppa_priority")
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
@@ -441,8 +556,24 @@ def benchmark_sweep_cmd(
         testcase_root=testcase_root,
         wall_clock_budget_seconds=wall_clock_budget_seconds,
         mixed_size_backend=cast(MixedSizeBackendName, mixed_size_backend),
+        selection_policy=cast(SelectionPolicy, selection_policy),
         diffusion_inference_steps=diffusion_inference_steps,
         trends_log_path=trends_log_path,
+        dreamplace_docker_image=dreamplace_docker_image or RunConfig.dreamplace_docker_image,
+        dreamplace_real_docker_image=dreamplace_real_docker_image
+        or RunConfig.dreamplace_real_docker_image,
+        dreamplace_docker_timeout_seconds=dreamplace_docker_timeout_seconds
+        if dreamplace_docker_timeout_seconds is not None
+        else RunConfig.dreamplace_docker_timeout_seconds,
+        dreamplace_real_docker_timeout_seconds=dreamplace_real_docker_timeout_seconds
+        if dreamplace_real_docker_timeout_seconds is not None
+        else RunConfig.dreamplace_real_docker_timeout_seconds,
+        dreamplace_docker_retries=dreamplace_docker_retries
+        if dreamplace_docker_retries is not None
+        else RunConfig.dreamplace_docker_retries,
+        dreamplace_mount_testcase=dreamplace_mount_testcase,
+        dreamplace_docker_extra_args=dreamplace_docker_extra_args,
+        dreamplace_docker_executable=dreamplace_docker_executable or RunConfig.dreamplace_docker_executable,
     )
     bench_tuple: tuple[str, ...] | None = None
     if benchmark:

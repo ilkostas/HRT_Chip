@@ -3,8 +3,10 @@
 Official Tier-1 selection uses the evaluator proxy only; these components are for
 exploration metadata and future DDPM guidance hooks.
 
-When an official ``Benchmark``-like object is supplied, HPWL uses LogSumExp smoothing
-over net macro centers and congestion uses a RUDY-style net-bbox demand map.
+With a netlist ``Benchmark`` and **pin-group** fields (``net_pin_dx`` / ``net_pin_dy``),
+HPWL is **exact weighted pin HPWL** and congestion uses **RUDY over pin bounding boxes**.
+If the benchmark has nets but no pin offsets, objectives ``phi_hpwl`` / ``phi_congestion``
+are left undefined (``nan`` → JSON ``null``) and ``surrogate_mode`` is ``netlist_pins_missing``.
 """
 
 from __future__ import annotations
@@ -13,12 +15,13 @@ import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from hrt_chip.geometry import overlap_area
+from hrt_chip.geometry import count_overlapping_pairs, overlap_area
 from hrt_chip.models import MacroRect, PlacementCandidate
 from hrt_chip.netlist_surrogates import (
     benchmark_has_netlist,
-    hpwl_logsumexp_surrogate,
-    rudy_congestion_surrogate,
+    benchmark_has_pin_groups,
+    hpwl_exact_pin_surrogate,
+    rudy_congestion_pin_surrogate,
 )
 
 
@@ -56,7 +59,6 @@ def hpwl_bbox_surrogate(macros: list[MacroRect], *, canvas_w: float = 1.0, canva
     cy = [m.y + 0.5 * m.h for m in macros]
     min_x, max_x = min(cx), max(cx)
     min_y, max_y = min(cy), max(cy)
-    # Scale to unit canvas extents for comparability
     w_bb = (max_x - min_x) / max(canvas_w, 1e-12)
     h_bb = (max_y - min_y) / max(canvas_h, 1e-12)
     return w_bb + h_bb
@@ -69,7 +71,7 @@ def congestion_grid_surrogate(
     canvas_h: float = 1.0,
     grid: int = 8,
 ) -> float:
-    """Simple occupancy variance on a G×G grid (RUDY-like density stub)."""
+    """Simple occupancy variance on a G×G grid (macro footprint; legacy stub)."""
     if grid < 2 or not macros:
         return 0.0
     cell_w = canvas_w / grid
@@ -90,7 +92,7 @@ def congestion_grid_surrogate(
     return var
 
 
-def legality_overlap_surrogate(macros: list[MacroRect]) -> float:
+def smooth_overlap_penalty(macros: list[MacroRect]) -> float:
     """Sum of squared overlap areas between macro pairs (0 when fully legal)."""
     n = len(macros)
     total = 0.0
@@ -102,6 +104,17 @@ def legality_overlap_surrogate(macros: list[MacroRect]) -> float:
     return total
 
 
+def hard_overlap_pair_count(macros: list[MacroRect]) -> int:
+    """Discrete count of overlapping macro pairs (constraint-style)."""
+    return int(count_overlapping_pairs(macros))
+
+
+def _float_for_json(x: float) -> float | None:
+    if math.isnan(x) or math.isinf(x):
+        return None
+    return float(x)
+
+
 @dataclass(frozen=True)
 class ObjectiveComponents:
     """Surrogate breakdown for candidate scoring tables."""
@@ -109,15 +122,41 @@ class ObjectiveComponents:
     phi_hpwl: float
     phi_congestion: float
     phi_legality: float
+    """Smooth overlap penalty (same as ``smooth_overlap_penalty``; kept for weight γ)."""
+    hard_overlap_pairs: int
+    smooth_overlap_penalty: float
     surrogate_mode: str = "bbox_grid_legacy"
 
-    def to_dict(self) -> dict[str, float | str]:
+    def to_dict(self) -> dict[str, float | str | int | None]:
         return {
-            "phi_hpwl": self.phi_hpwl,
-            "phi_congestion": self.phi_congestion,
-            "phi_legality": self.phi_legality,
+            "phi_hpwl": _float_for_json(self.phi_hpwl),
+            "phi_congestion": _float_for_json(self.phi_congestion),
+            "phi_legality": _float_for_json(self.phi_legality),
+            "hard_overlap_pairs": int(self.hard_overlap_pairs),
+            "smooth_overlap_penalty": _float_for_json(self.smooth_overlap_penalty),
             "surrogate_mode": self.surrogate_mode,
         }
+
+
+def composite_guidance_objective(
+    objs: ObjectiveComponents,
+    *,
+    alpha_hpwl: float,
+    beta_congestion: float,
+    gamma_legality: float,
+) -> float | None:
+    """
+    Weighted scalar surrogate matching inference weights (lower is better).
+
+    Returns ``None`` when HPWL or congestion terms are unavailable (e.g. pin data missing).
+    """
+    if math.isnan(objs.phi_hpwl) or math.isnan(objs.phi_congestion):
+        return None
+    return (
+        alpha_hpwl * objs.phi_hpwl
+        + beta_congestion * objs.phi_congestion
+        + gamma_legality * objs.phi_legality
+    )
 
 
 def compute_objective_components(
@@ -127,24 +166,28 @@ def compute_objective_components(
     canvas_h: float = 1.0,
     benchmark: Any | None = None,
 ) -> ObjectiveComponents:
-    if benchmark_has_netlist(benchmark):
-        hpwl = hpwl_logsumexp_surrogate(
-            macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h
-        )
-        cong = rudy_congestion_surrogate(macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h)
-        if math.isnan(hpwl):
-            hpwl = hpwl_bbox_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
-        if math.isnan(cong):
-            cong = congestion_grid_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
-        mode = "netlist_lse_rudy"
+    smooth = smooth_overlap_penalty(macros)
+    hard = hard_overlap_pair_count(macros)
+
+    if benchmark_has_pin_groups(benchmark):
+        hpwl = hpwl_exact_pin_surrogate(macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h)
+        cong = rudy_congestion_pin_surrogate(macros, benchmark, canvas_w=canvas_w, canvas_h=canvas_h)
+        mode = "netlist_pin_rudy"
+    elif benchmark_has_netlist(benchmark):
+        hpwl = float("nan")
+        cong = float("nan")
+        mode = "netlist_pins_missing"
     else:
         hpwl = hpwl_bbox_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
         cong = congestion_grid_surrogate(macros, canvas_w=canvas_w, canvas_h=canvas_h)
         mode = "bbox_grid_legacy"
+
     return ObjectiveComponents(
         phi_hpwl=hpwl,
         phi_congestion=cong,
-        phi_legality=legality_overlap_surrogate(macros),
+        phi_legality=smooth,
+        hard_overlap_pairs=hard,
+        smooth_overlap_penalty=smooth,
         surrogate_mode=mode,
     )
 

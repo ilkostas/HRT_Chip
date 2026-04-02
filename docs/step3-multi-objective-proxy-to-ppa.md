@@ -14,7 +14,9 @@ Implement **standalone**, **fast** surrogates. In diffusion sampling these act a
 
 ### Wirelength potential — ϕ_hpwl
 
-Use **Half-Perimeter Wirelength (HPWL)**: for each net, bounding box over connected pins; sum (or weighted sum) over nets. Differentiable approximations are common for gradient-based guidance.
+Use **Half-Perimeter Wirelength (HPWL)**: for each net, bounding box over connected **pins**; sum (or weighted sum) over nets. Differentiable approximations (e.g. LogSumExp over pin coordinates) are common for gradient-based guidance.
+
+**Implementation note (this repo):** the pipeline scoring table uses **exact pin HPWL** when the loaded `Benchmark` provides per-net pin offsets (`net_pin_dx`, `net_pin_dy` parallel to `net_nodes`). Without those fields, netlist-aware HPWL/congestion scalars are left undefined (`null` in `results.json`) so surrogates are not silently misaligned with true pin geometry.
 
 ### Congestion potential — ϕ_congestion
 

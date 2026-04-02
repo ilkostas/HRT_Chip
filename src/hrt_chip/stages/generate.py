@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Sequence
+from typing import Any, Sequence
 
 from hrt_chip.diffusion import (
     COORD_SPACE_NORMALIZED,
@@ -11,6 +11,7 @@ from hrt_chip.diffusion import (
     DiffusionSampleRequest,
     DiffusionSampler,
     GuidanceContext,
+    GuidanceObjectiveBias,
     MacroSpec,
 )
 from hrt_chip.geometry import normalized_center_to_lower_left
@@ -48,6 +49,7 @@ def generate_candidates(
     diffusion_steps: int = 1000,
     sampler: DiffusionSampler | None = None,
     guidance_sweep: Sequence[tuple[float, float, float]] | None = None,
+    objective_bias: GuidanceObjectiveBias | None = None,
 ) -> list[PlacementCandidate]:
     """
     Produce ``num_candidates`` placement hypotheses per weight vector using the diffusion sampler.
@@ -87,6 +89,7 @@ def generate_candidates(
             coord_space=COORD_SPACE_NORMALIZED,
             diffusion_steps=diffusion_steps,
             guidance=gctx,
+            objective_bias=objective_bias,
         )
         batch = smp.sample_batch(req)
         prov = batch.provenance.to_dict()
@@ -102,23 +105,26 @@ def generate_candidates(
                 macros.append(MacroRect(name=spec.name, x=x, y=y, w=spec.w, h=spec.h))
             # Multi-sweep: prefix for global uniqueness; single-sweep: legacy ids (Phase 2 compat).
             cand_id = cs.candidate_id if len(sweep) == 1 else f"s{si:02d}_{cs.candidate_id}"
+            meta: dict[str, Any] = {
+                "stage": "generated",
+                "sampler": prov,
+                "normalized_centers": normalized_centers,
+                "guidance": {
+                    "sweep_index": si,
+                    "alpha_hpwl": a,
+                    "beta_congestion": b,
+                    "gamma_legality": g,
+                    "weights": [a, b, g],
+                },
+            }
+            if objective_bias is not None:
+                meta["objective_bias"] = objective_bias.to_dict()
             out.append(
                 PlacementCandidate(
                     candidate_id=cand_id,
                     benchmark_id=benchmark_id,
                     macros=macros,
-                    metadata={
-                        "stage": "generated",
-                        "sampler": prov,
-                        "normalized_centers": normalized_centers,
-                        "guidance": {
-                            "sweep_index": si,
-                            "alpha_hpwl": a,
-                            "beta_congestion": b,
-                            "gamma_legality": g,
-                            "weights": [a, b, g],
-                        },
-                    },
+                    metadata=meta,
                 )
             )
     return out

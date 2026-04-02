@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 COORD_SPACE_NORMALIZED = "normalized_centers_-1_1"
 
@@ -17,6 +17,22 @@ class GuidanceContext:
     alpha_hpwl: float
     beta_congestion: float
     gamma_legality: float
+
+
+@dataclass(frozen=True)
+class GuidanceObjectiveBias:
+    """
+    Future hook for gradient-like objective steering during reverse diffusion.
+
+    Samplers ignore this today; it is recorded for provenance and forward-compatible APIs.
+    """
+
+    bias_kind: str = "none"
+    strength: float = 0.0
+    extra: dict[str, float] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"bias_kind": self.bias_kind, "strength": self.strength, "extra": self.extra}
 
 
 @dataclass(frozen=True)
@@ -43,6 +59,7 @@ class DiffusionSampleRequest:
     coord_space: str = COORD_SPACE_NORMALIZED
     diffusion_steps: int = 1000
     guidance: GuidanceContext | None = None
+    objective_bias: GuidanceObjectiveBias | None = None
 
 
 @dataclass(frozen=True)
@@ -77,13 +94,14 @@ class SamplerProvenance:
     num_candidates: int
     diffusion_steps: int
     guidance: dict[str, float | int] | None = None
+    objective_bias: dict[str, Any] | None = None
     # Phase 4: trained sampler audit fields (optional).
     checkpoint_path: str | None = None
     training_dataset_version: str | None = None
     model_architecture: str | None = None
 
-    def to_dict(self) -> dict[str, str | int | float | dict[str, float | int] | None]:
-        d: dict[str, str | int | float | dict[str, float | int] | None] = {
+    def to_dict(self) -> dict[str, str | int | float | dict[str, Any] | None]:
+        d: dict[str, str | int | float | dict[str, Any] | None] = {
             "sampler_name": self.sampler_name,
             "model_stub": self.model_stub,
             "generation_mode": self.generation_mode,
@@ -94,6 +112,8 @@ class SamplerProvenance:
         }
         if self.guidance is not None:
             d["guidance"] = dict(self.guidance)
+        if self.objective_bias is not None:
+            d["objective_bias"] = dict(self.objective_bias)
         if self.checkpoint_path is not None:
             d["checkpoint_path"] = self.checkpoint_path
         if self.training_dataset_version is not None:
@@ -139,6 +159,7 @@ class DeterministicDDPMStubSampler:
             # Deterministic shifts so different (α,β,γ) explore different regions (stub only).
             bias_x = (g.alpha_hpwl - g.beta_congestion) * 0.15
             bias_y = (g.beta_congestion - g.gamma_legality) * 0.15
+        # GuidanceObjectiveBias is a no-op for the stub (reserved for future DDPM guidance).
         out: list[CandidateSample] = []
         for idx in range(request.num_candidates):
             candidate_id = f"cand_{idx:04d}"
@@ -165,6 +186,10 @@ class DeterministicDDPMStubSampler:
                 "gamma_legality": gu.gamma_legality,
             }
 
+        objective_bias_dict: dict[str, Any] | None = None
+        if request.objective_bias is not None:
+            objective_bias_dict = request.objective_bias.to_dict()
+
         provenance = SamplerProvenance(
             sampler_name=self.sampler_name,
             model_stub=self.model_stub,
@@ -174,5 +199,6 @@ class DeterministicDDPMStubSampler:
             num_candidates=request.num_candidates,
             diffusion_steps=request.diffusion_steps,
             guidance=guidance_dict,
+            objective_bias=objective_bias_dict,
         )
         return SampleBatch(candidates=tuple(out), provenance=provenance)

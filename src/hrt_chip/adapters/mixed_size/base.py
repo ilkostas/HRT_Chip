@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from hrt_chip.models import MacroRect, PlacementCandidate
@@ -21,6 +22,12 @@ class MixedSizeRequest:
     benchmark: Any | None = None
     canvas_w: float = 1.0
     canvas_h: float = 1.0
+    candidate_id: str | None = None
+    """Host candidate id for artifact subfolders (dreamplace backend)."""
+    work_dir_host: Path | None = None
+    """Host directory mounted at ``/work`` for Docker mixed-size flow."""
+    testcase_root_host: Path | None = None
+    """Host ICCAD04 root mounted at ``/testcase`` when enabled."""
 
 
 @dataclass

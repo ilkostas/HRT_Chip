@@ -10,6 +10,7 @@ This document locks the **structural contract** for reproducibility and regressi
   - `timing`: stage and total wall-clock seconds.
   - `budget`: resolved sweep/candidate caps when a wall-clock budget is active.
   - `testcase_root`, `canvas_width`, `canvas_height`, guidance/sampler fields as before.
+  - `selection_policy`, `selection_rationale`, per-row `mixed_size_profile` (batch-normalized mixed-size metrics + `composite_ppa`).
 
 Validation (Python):
 

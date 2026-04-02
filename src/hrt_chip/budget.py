@@ -21,6 +21,11 @@ def _estimated_seconds_per_candidate(config: RunConfig) -> float:
         base += 0.2
     elif config.mixed_size_backend == "stub":
         base += 0.02
+    elif config.mixed_size_backend == "dreamplace":
+        # Docker pull/run variance; budget uses ~half the configured timeout as a rough upper bound.
+        base += 10.0 + 0.55 * float(max(1, int(config.dreamplace_docker_timeout_seconds)))
+    elif config.mixed_size_backend == "dreamplace_real":
+        base += 15.0 + 0.55 * float(max(1, int(config.dreamplace_real_docker_timeout_seconds)))
     return max(base, 0.1)
 
 

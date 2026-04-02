@@ -12,6 +12,7 @@ from hrt_chip.config import (
     resolved_guidance_sweep,
 )
 from hrt_chip.diffusion import DiffusionSampleRequest
+from hrt_chip import mixed_size_metrics as msm
 from hrt_chip.pipeline import run_pipeline
 from hrt_chip.stages import generate as generate_mod
 from hrt_chip.stages.generate import derive_sweep_seed, generate_candidates
@@ -97,13 +98,104 @@ def test_pipeline_scoring_table_and_argmin(tmp_path: Path) -> None:
         assert "surrogate_objectives" in row
         so = row["surrogate_objectives"]
         assert "phi_hpwl" in so and "phi_congestion" in so and "phi_legality" in so
+        assert "hard_overlap_pairs" in so and "smooth_overlap_penalty" in so
         assert "surrogate_mode" in so
+        assert "mixed_size_profile" in row
+
+    spa = r["surrogate_proxy_alignment"]
+    assert spa["n_candidates_total"] == 6
+    assert "spearman_rho" in spa and "kendall_tau" in spa
+    assert "surrogate_good_proxy_bad" in spa
 
     ranking = r["ranking"]
-    assert ranking == sorted(ranking, key=lambda x: x["proxy_score"])
+    assert ranking == sorted(ranking, key=msm.ranking_key_proxy_first)
     assert r["best_candidate_id"] == ranking[0]["candidate_id"]
     assert r["best_proxy_score"] == ranking[0]["proxy_score"]
+    assert r.get("selection_policy") == "proxy_first"
     assert r.get("guidance_sweep_resolved") == [list(t) for t in GUIDANCE_PRESET_PARETO3]
+
+
+def test_ppa_priority_selects_better_mixed_size_over_proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """With equal proxy ordering concern, ppa_priority picks lower composite mixed-size score."""
+
+    from hrt_chip.adapters.evaluator.base import EvaluationResult, EvaluatorAdapter
+    from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest, MixedSizeResult
+    from hrt_chip.models import MacroRect, PlacementCandidate
+
+    class SeqMs(MixedSizeBackend):
+        def __init__(self) -> None:
+            self._n = 0
+            self._extras = (
+                {
+                    "density_overflow": 10.0,
+                    "rudy_or_route_proxy": 10.0,
+                    "backend_runtime_seconds": 10.0,
+                },
+                {
+                    "density_overflow": 0.01,
+                    "rudy_or_route_proxy": 0.01,
+                    "backend_runtime_seconds": 0.01,
+                },
+            )
+
+        def run(self, request: MixedSizeRequest) -> MixedSizeResult:
+            ex = dict(self._extras[min(self._n, len(self._extras) - 1)])
+            self._n += 1
+            return MixedSizeResult(ok=True, message="ok", extra=ex)
+
+    class ProxyByOrder(EvaluatorAdapter):
+        def evaluate(self, candidate, *, benchmark_id, run_context):  # type: ignore[no-untyped-def]
+            is_first = candidate.candidate_id.endswith("0000")
+            p = 1.0 if is_first else 2.0
+            return EvaluationResult(candidate.candidate_id, p, True, {})
+
+    def fake_gen(**kwargs: object) -> list[PlacementCandidate]:
+        return [
+            PlacementCandidate(
+                "s00_cand_0000",
+                "ibm01",
+                [
+                    MacroRect("ibm01_M0", 0.0, 0.0, 0.12, 0.08),
+                    MacroRect("ibm01_M1", 0.5, 0.5, 0.10, 0.09),
+                ],
+                metadata={"stage": "generated", "sampler": {}, "guidance": {"sweep_index": 0}},
+            ),
+            PlacementCandidate(
+                "s00_cand_0001",
+                "ibm01",
+                [
+                    MacroRect("ibm01_M0", 0.02, 0.02, 0.12, 0.08),
+                    MacroRect("ibm01_M1", 0.52, 0.52, 0.10, 0.09),
+                ],
+                metadata={"stage": "generated", "sampler": {}, "guidance": {"sweep_index": 0}},
+            ),
+        ]
+
+    monkeypatch.setattr("hrt_chip.pipeline.generate_candidates", fake_gen)
+    rid0 = "00000000-0000-0000-0000-0000000000a1"
+    rid1 = "00000000-0000-0000-0000-0000000000a2"
+    cfg_pf = RunConfig(
+        benchmark_id="ibm01",
+        seed=1,
+        num_candidates=2,
+        output_dir=tmp_path,
+        deterministic=True,
+        selection_policy="proxy_first",
+    )
+    r_pf = run_pipeline(cfg_pf, mixed_size=SeqMs(), evaluator=ProxyByOrder(), run_id=rid0)
+    assert r_pf["best_candidate_id"] == "s00_cand_0000"
+
+    cfg_pp = RunConfig(
+        benchmark_id="ibm01",
+        seed=1,
+        num_candidates=2,
+        output_dir=tmp_path,
+        deterministic=True,
+        selection_policy="ppa_priority",
+    )
+    r_pp = run_pipeline(cfg_pp, mixed_size=SeqMs(), evaluator=ProxyByOrder(), run_id=rid1)
+    assert r_pp["best_candidate_id"] == "s00_cand_0001"
+    assert r_pp["ranking"] == sorted(r_pp["ranking"], key=msm.ranking_key_ppa_priority)
 
 
 def test_weights_do_not_override_proxy_selection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
