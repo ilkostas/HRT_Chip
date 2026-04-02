@@ -55,6 +55,50 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 @dataclass
+class DatasetManifest:
+    """Versioned metadata for a synthetic on-disk dataset (Phase 4)."""
+
+    dataset_id: str
+    dataset_version: str
+    schema_version: str
+    corpus_version: str
+    seed: int
+    num_samples: int
+    n_macros_min: int
+    n_macros_max: int
+    created_at_utc: str
+    data_dir: str
+    shards: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def write_json(self, path: Path) -> None:
+        write_json(path, self.to_dict())
+
+
+@dataclass
+class TrainingRunManifest:
+    """Written next to checkpoints for replay and auditing."""
+
+    train_run_id: str
+    created_at_utc: str
+    config: dict[str, Any]
+    dataset_manifest_path: str
+    dataset_version: str
+    checkpoint_path: str
+    metrics_path: str
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def write_json(self, path: Path) -> None:
+        write_json(path, self.to_dict())
+
+
+@dataclass
 class PipelineArtifacts:
     """Paths for one pipeline run."""
 

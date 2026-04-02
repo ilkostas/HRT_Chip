@@ -125,7 +125,7 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Current Project Status
 
-Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, and **Phase 3 guided objectives / Pareto-style batch selection** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the official evaluator proxy** only. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
+Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, **Phase 3 guided objectives / Pareto-style batch selection**, and **Phase 4 synthetic data + PyTorch/PyG DDPM training** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** (default) or a **trained PyTorch checkpoint** (`--sampler-backend pytorch_checkpoint --checkpoint …`) that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the official evaluator proxy** only. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`, optional `checkpoint_path` / `training_dataset_version`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
 
 ### What Exists
 
@@ -139,7 +139,7 @@ Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inferenc
 
 ### What Is Still Stubbed / Planned
 
-- PyTorch DDPM network, training loop, and real reverse diffusion (Phase 4+).
+- Further scaling of synthetic data and model quality toward competition benchmarks (beyond Phase 4 scaffolding).
 - Differentiable DDPM guidance on ε-prediction / x̂₀ (Phase 4+; Phase 3 provides sweep + surrogate scoring + selection policy).
 - Official benchmark harness over all 17 IBM designs (Phase 5).
 - Real evaluator and DREAMPlace/hMETIS wiring behind adapters ([`docs/integration-notes.md`](docs/integration-notes.md)).
@@ -173,6 +173,19 @@ uv run hrt-chip run --benchmark ibm01 --guidance-weight 0.8,0.1,0.1 --guidance-w
 ```
 
 `results.json` includes `guidance_sweep_resolved`, `scoring_table` (surrogate + proxy), and `ranking` / `best_candidate_id` by official proxy only.
+
+**Phase 4 — synthetic dataset, training, trained sampler inference:**
+
+```bash
+# Generate synthetic layouts (v1 = smaller graphs, v2 = larger); writes dataset_manifest.json + shards
+uv run hrt-chip dataset-generate --output-dir data/synthetic/v1 --corpus v1 --num-samples 256
+
+# Train ε-prediction DDPM (writes checkpoint.pt + training_manifest.json under training_runs/<id>/)
+uv run hrt-chip train --dataset-dir data/synthetic/v1 --epochs 10 --model-architecture baseline_gnn
+
+# Run pipeline using a trained checkpoint
+uv run hrt-chip run --benchmark ibm01 --sampler-backend pytorch_checkpoint --checkpoint training_runs/<id>/checkpoint.pt
+```
 
 Equivalent:
 
@@ -222,8 +235,9 @@ This project treats reproducibility as mandatory:
 2. ~~Harden legality checker + greedy legalizer with explicit zero-overlap assertions (Phase 1).~~
 3. ~~Diffusion inference skeleton: sampler contract, batched stub, provenance, guardrail tests (Phase 2).~~
 4. ~~Guided objectives + strict proxy selection policy (Phase 3)~~; official evaluator adapter when available.
-5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
-6. Add NG45-oriented handoff format/export path for downstream validation.
+5. ~~Synthetic data generation, PyTorch/PyG DDPM training, and checkpoint-based sampler inference (Phase 4).~~
+6. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
+7. Add NG45-oriented handoff format/export path for downstream validation.
 
 ## References
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional, cast
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from hrt_chip.config import RunConfig
+from hrt_chip.config import RunConfig, SamplerBackend, SyntheticDatasetConfig, TrainingConfig
 from hrt_chip.pipeline import replay_from_manifest, run_pipeline
 
 app = typer.Typer(no_args_is_help=True, help="HRT macro placement pipeline.")
@@ -69,9 +69,32 @@ def run(
             "Repeat option for multiple vectors; overrides --guidance-preset."
         ),
     ),
+    sampler_backend: str = typer.Option(
+        "stub",
+        "--sampler-backend",
+        help="stub (default) or pytorch_checkpoint (Phase 4 trained DDPM).",
+    ),
+    checkpoint: Optional[Path] = typer.Option(
+        None,
+        "--checkpoint",
+        help="Path to checkpoint.pt when --sampler-backend=pytorch_checkpoint.",
+    ),
+    training_dataset_version: Optional[str] = typer.Option(
+        None,
+        "--training-dataset-version",
+        help="Optional dataset version string for audit (defaults from checkpoint manifest).",
+    ),
+    model_architecture: Optional[str] = typer.Option(
+        None,
+        "--model-architecture",
+        help="Optional echo of train-time architecture (baseline_gnn, res_gnn, att_gnn).",
+    ),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
+    if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
+        raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     gw = _parse_guidance_weight_triples(guidance_weight)
+    arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     cfg = RunConfig(
         benchmark_id=benchmark,
         seed=seed,
@@ -81,6 +104,10 @@ def run(
         deterministic=True,
         guidance_preset=None if gw else guidance_preset,
         guidance_weights_sweep=gw,
+        sampler_backend=cast(SamplerBackend, sampler_backend),
+        checkpoint_path=checkpoint,
+        training_dataset_version=training_dataset_version,
+        model_architecture=arch,
     )
     results = run_pipeline(cfg, run_id=run_id)
     _print_summary(results, cfg)
@@ -96,10 +123,95 @@ def replay_cmd(
     _print_summary(results, cfg)
 
 
+@app.command("dataset-generate")
+def dataset_generate_cmd(
+    output_dir: Path = typer.Option(
+        Path("data/synthetic/v1"),
+        "--output-dir",
+        "-o",
+        help="Directory to write shards and dataset_manifest.json.",
+    ),
+    corpus: str = typer.Option(
+        "v1",
+        "--corpus",
+        "-c",
+        help="Synthetic corpus scale: v1 (smaller graphs) or v2 (larger).",
+    ),
+    seed: int = typer.Option(42, "--seed", "-s"),
+    num_samples: int = typer.Option(256, "--num-samples", "-n"),
+    dataset_version: str = typer.Option("1", "--dataset-version"),
+) -> None:
+    """Generate synthetic legal layouts and PyG shards (Phase 4)."""
+    if corpus not in ("v1", "v2"):
+        raise typer.BadParameter("--corpus must be v1 or v2")
+    from hrt_chip.data.synthetic import generate_synthetic_dataset
+
+    cfg = SyntheticDatasetConfig(
+        output_dir=output_dir,
+        corpus_version=cast(Literal["v1", "v2"], corpus),
+        seed=seed,
+        num_samples=num_samples,
+        dataset_version=dataset_version,
+    )
+    manifest_path = generate_synthetic_dataset(cfg)
+    console.print(f"[bold green]Dataset written[/bold green] manifest={manifest_path}")
+
+
+@app.command("train")
+def train_cmd(
+    dataset_dir: Path = typer.Option(
+        ...,
+        "--dataset-dir",
+        "-d",
+        exists=True,
+        file_okay=False,
+        help="Directory containing dataset_manifest.json and shard_*.pt files.",
+    ),
+    output_dir: Path = typer.Option(Path("training_runs"), "--output-dir", "-o"),
+    seed: int = typer.Option(42, "--seed", "-s"),
+    epochs: int = typer.Option(10, "--epochs", "-e"),
+    batch_size: int = typer.Option(8, "--batch-size", "-b"),
+    learning_rate: float = typer.Option(1e-3, "--lr"),
+    diffusion_steps: int = typer.Option(1000, "--diffusion-steps", help="DDPM timesteps T."),
+    model_architecture: str = typer.Option(
+        "baseline_gnn",
+        "--model-architecture",
+        "-m",
+        help="baseline_gnn | res_gnn | att_gnn",
+    ),
+    hidden_dim: int = typer.Option(64, "--hidden-dim"),
+    num_layers: int = typer.Option(3, "--num-layers"),
+    train_run_id: Optional[str] = typer.Option(None, "--train-run-id"),
+) -> None:
+    """Train ε-prediction DDPM on a synthetic dataset (Phase 4)."""
+    if model_architecture not in ("baseline_gnn", "res_gnn", "att_gnn"):
+        raise typer.BadParameter("--model-architecture must be baseline_gnn, res_gnn, or att_gnn")
+    from hrt_chip.training.train import train_loop
+
+    cfg = TrainingConfig(
+        dataset_dir=dataset_dir,
+        output_dir=output_dir,
+        seed=seed,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        diffusion_steps=diffusion_steps,
+        model_architecture=cast(Literal["baseline_gnn", "res_gnn", "att_gnn"], model_architecture),
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        train_run_id=train_run_id,
+    )
+    out = train_loop(cfg)
+    console.print(f"[bold green]Training complete[/bold green] {out}")
+
+
 def _print_summary(results: dict, cfg: RunConfig) -> None:
     mid = results["manifest"]["run_id"]
     console.print(f"[bold green]Run complete[/bold green] run_id={mid}")
     console.print(f"benchmark={cfg.benchmark_id} seed={cfg.seed} candidates={cfg.num_candidates}")
+    console.print(f"sampler_backend={cfg.sampler_backend}")
+    if cfg.checkpoint_path:
+        console.print(f"checkpoint={cfg.checkpoint_path}")
     gsr = results.get("guidance_sweep_resolved")
     if gsr:
         console.print(f"guidance_sweep_resolved={gsr}")

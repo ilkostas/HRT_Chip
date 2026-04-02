@@ -77,6 +77,10 @@ class SamplerProvenance:
     num_candidates: int
     diffusion_steps: int
     guidance: dict[str, float | int] | None = None
+    # Phase 4: trained sampler audit fields (optional).
+    checkpoint_path: str | None = None
+    training_dataset_version: str | None = None
+    model_architecture: str | None = None
 
     def to_dict(self) -> dict[str, str | int | float | dict[str, float | int] | None]:
         d: dict[str, str | int | float | dict[str, float | int] | None] = {
@@ -90,6 +94,12 @@ class SamplerProvenance:
         }
         if self.guidance is not None:
             d["guidance"] = dict(self.guidance)
+        if self.checkpoint_path is not None:
+            d["checkpoint_path"] = self.checkpoint_path
+        if self.training_dataset_version is not None:
+            d["training_dataset_version"] = self.training_dataset_version
+        if self.model_architecture is not None:
+            d["model_architecture"] = self.model_architecture
         return d
 
 

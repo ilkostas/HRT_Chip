@@ -9,6 +9,7 @@ from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
 from hrt_chip.config import RunConfig, resolved_guidance_sweep
+from hrt_chip.diffusion import DiffusionSampler
 from hrt_chip.geometry import placement_is_legal
 from hrt_chip.guidance import compute_objectives_for_candidate
 from hrt_chip.io.artifacts import PipelineArtifacts, build_manifest, write_json
@@ -17,11 +18,22 @@ from hrt_chip.stages.generate import generate_candidates
 from hrt_chip.stages.legalize import legalize_candidate
 
 
+def _resolve_sampler(config: RunConfig, sampler: DiffusionSampler | None) -> DiffusionSampler | None:
+    if sampler is not None:
+        return sampler
+    if config.sampler_backend == "pytorch_checkpoint":
+        from hrt_chip.adapters.diffusion.pytorch_sampler import build_pytorch_sampler
+
+        return build_pytorch_sampler(config)
+    return None
+
+
 def run_pipeline(
     config: RunConfig,
     *,
     evaluator: EvaluatorAdapter | None = None,
     mixed_size: MixedSizeBackend | None = None,
+    sampler: DiffusionSampler | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """
@@ -51,12 +63,14 @@ def run_pipeline(
         guidance_preset=config.guidance_preset,
         guidance_weights_sweep=config.guidance_weights_sweep,
     )
+    smp = _resolve_sampler(config, sampler)
     raw = generate_candidates(
         benchmark_id=config.benchmark_id,
         seed=config.seed,
         num_candidates=config.num_candidates,
         diffusion_steps=config.diffusion_steps,
         guidance_sweep=sweep,
+        sampler=smp,
     )
 
     evaluations: list[dict[str, Any]] = []
@@ -141,6 +155,10 @@ def run_pipeline(
         "benchmark_id": config.benchmark_id,
         "guidance_sweep_resolved": [list(t) for t in sweep],
         "sampler_provenance": sampler_provenance,
+        "sampler_backend": config.sampler_backend,
+        "checkpoint_path": str(config.checkpoint_path) if config.checkpoint_path else None,
+        "training_dataset_version": config.training_dataset_version
+        or (sampler_provenance or {}).get("training_dataset_version"),
         "ranking": ranking,
         "scoring_table": scoring_table,
         "best_candidate_id": best_candidate_id,
