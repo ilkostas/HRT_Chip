@@ -11,9 +11,19 @@ This document describes how the executable pipeline connects to external competi
 
 ## Diffusion sampler (Phase 2)
 
-- **Contract:** [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) — `DiffusionSampler.sample_batch(DiffusionSampleRequest) -> SampleBatch`. The request includes the **full macro set**; each candidate in the batch carries **all** macro centers in normalized **`[-1, 1]`** space (`coord_space: normalized_centers_-1_1`).
+- **Contract:** [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) — `DiffusionSampler.sample_batch(DiffusionSampleRequest) -> SampleBatch`. The request includes the **full macro set**; each candidate in the batch carries **all** macro centers in normalized **`[-1, 1]`** space (`coord_space: normalized_centers_-1_1`). Optional request fields: `diffusion_inference_steps`, `sampler_mode`, `reverse_timestep_indices` (PyTorch path).
 - **Stub:** `DeterministicDDPMStubSampler` — deterministic RNG layout for development; records provenance (`sampler_name`, `model_stub`, `generation_mode`, `diffusion_steps`) in `PlacementCandidate.metadata["sampler"]` and in `results.json` as `sampler_provenance`.
-- **Integration (Phase 4+):** Implement a PyTorch-backed sampler that satisfies `DiffusionSampler`, load trained ε-prediction weights, and swap the default in `generate_candidates(..., sampler=...)`. Keep the adapter boundary so `run_pipeline` stays unchanged.
+- **PyTorch (Phase 4+):** [`src/hrt_chip/adapters/diffusion/pytorch_sampler.py`](../src/hrt_chip/adapters/diffusion/pytorch_sampler.py) — `RunConfig.sampler_mode`: **`ddpm_full`** (full `T` ancestral steps), **`ddpm_subsampled`** (fewer DDPM steps via [`subsampled_reverse_timesteps`](../src/hrt_chip/training/schedule.py)), **`ddim`** (deterministic DDIM jumps between schedule indices). Optional **`diffusion_reverse_schedule`** string (comma-separated indices, e.g. `999,500,0`) overrides uniform spacing. CLI: `--sampler-mode`, `--diffusion-reverse-schedule`, `--diffusion-inference-steps`.
+
+## Runtime budget and pre-eval (orchestration)
+
+- **Static caps:** [`src/hrt_chip/budget.py`](../src/hrt_chip/budget.py) — `resolve_generation_budget` shrinks guidance sweep / `num_candidates` when `wall_clock_budget_seconds` is set (pre-run).
+- **Runtime manager:** [`src/hrt_chip/runtime_budget.py`](../src/hrt_chip/runtime_budget.py) — optional per-stage fraction tracking and **early stop** of further guidance vectors if remaining wall time is insufficient for pending legalization / mixed-size / eval (pipeline generates **one sweep vector at a time**). Adaptive **fewer diffusion inference steps** under time pressure (`recommended_diffusion_inference_steps`).
+- **Pre-eval skipping:** `RunConfig.pre_eval_rejection_enabled` — skips the expensive evaluator for illegal macro placements, excessive **hard overlap pairs**, or bad **surrogate composite** when thresholds are set (`pre_eval_max_hard_overlap_pairs`, `pre_eval_surrogate_composite_max`). Skips are recorded under `evaluations[].details` and `pre_eval_rejection` in `results.json`.
+
+## Trend dashboard (CLI)
+
+- **`hrt-chip trends-report`** — loads recent JSONL lines (default `runs/trends/sweep_history.jsonl`) and prints gate pass rates and a table of recent sweeps. Optional `--baseline-sweep-id` for mean-proxy delta vs a reference sweep.
 
 ## Evaluator adapter
 

@@ -45,6 +45,79 @@ def q_sample(
     return s1 * x0 + s2 * noise
 
 
+def parse_custom_reverse_timesteps(*, num_timesteps: int, schedule_str: str) -> list[int]:
+    """
+    Parse comma-separated timestep indices (e.g. ``1000,500,250,0`` for ``T=1000`` → indices ``999,499,...``).
+
+    Accepts values in ``[0, num_timesteps]`` where ``num_timesteps`` is treated as ``T`` (maps ``T`` → index ``T-1``).
+    Returns strictly decreasing indices ending at 0.
+    """
+    T = int(num_timesteps)
+    parts = [p.strip() for p in schedule_str.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("empty diffusion_reverse_schedule")
+    raw: list[int] = []
+    for p in parts:
+        v = int(float(p))
+        if v < 0:
+            raise ValueError(f"invalid timestep {v} in schedule")
+        if v > T:
+            raise ValueError(f"timestep {v} exceeds training timesteps T={T}")
+        idx = T - 1 if v == T else v
+        if not (0 <= idx < T):
+            raise ValueError(f"resolved index {idx} out of range for T={T}")
+        raw.append(idx)
+    out: list[int] = []
+    seen: set[int] = set()
+    for t in sorted(raw, reverse=True):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    if not out:
+        raise ValueError("no timesteps after parse")
+    if out[-1] != 0:
+        out.append(0)
+        out = sorted(set(out), reverse=True)
+    return out
+
+
+def build_reverse_timestep_list(
+    *,
+    num_timesteps: int,
+    sampler_mode: str,
+    num_inference_steps: int | None,
+    custom_indices: tuple[int, ...] | None,
+    custom_schedule_str: str | None,
+) -> tuple[list[int], str]:
+    """
+    Monotonic decreasing indices for reverse diffusion.
+
+    Returns ``(timesteps_high_to_low, description)``.
+    """
+    T = int(num_timesteps)
+    if custom_indices is not None and len(custom_indices) > 0:
+        seq = list(custom_indices)
+    elif custom_schedule_str is not None and custom_schedule_str.strip():
+        seq = parse_custom_reverse_timesteps(num_timesteps=T, schedule_str=custom_schedule_str)
+    elif sampler_mode == "ddpm_full":
+        seq = list(range(T - 1, -1, -1))
+        return seq, f"ddpm_full:T={T}"
+    else:
+        seq = subsampled_reverse_timesteps(num_timesteps=T, num_inference_steps=num_inference_steps)
+        return seq, f"{sampler_mode}:inference_steps={num_inference_steps}"
+    # custom list path
+    out: list[int] = []
+    seen: set[int] = set()
+    for t in sorted(seq, reverse=True):
+        if 0 <= t < T and t not in seen:
+            seen.add(t)
+            out.append(t)
+    if 0 not in out:
+        out.append(0)
+        out = sorted(set(out), reverse=True)
+    return out, f"custom:{','.join(str(x) for x in out)}"
+
+
 @torch.no_grad()
 def subsampled_reverse_timesteps(*, num_timesteps: int, num_inference_steps: int | None) -> list[int]:
     """
@@ -97,3 +170,25 @@ def p_sample_step_eps(
     posterior_variance_t = extract(sched.posterior_variance, t, x)
     noise = torch.randn_like(x)
     return model_mean + torch.sqrt(posterior_variance_t) * noise
+
+
+@torch.no_grad()
+def ddim_step_eps(
+    eps_model: torch.nn.Module,
+    x: torch.Tensor,
+    t_cur: int,
+    t_next: int,
+    sched: DiffusionSchedule,
+    batch: object,
+    t_node: torch.Tensor,
+) -> torch.Tensor:
+    """
+    One DDIM update (η=0) from timestep ``t_cur`` to ``t_next`` (``t_next < t_cur``), ε-prediction model.
+
+    ``t_node`` must be filled with ``t_cur`` for each row (per-node timestep tensor).
+    """
+    eps = eps_model(batch, x, t_node)
+    ab_cur = sched.alphas_cumprod[t_cur].to(device=x.device, dtype=x.dtype)
+    ab_next = sched.alphas_cumprod[t_next].to(device=x.device, dtype=x.dtype)
+    pred_x0 = (x - torch.sqrt(1.0 - ab_cur) * eps) / torch.sqrt(ab_cur + 1e-8)
+    return torch.sqrt(ab_next) * pred_x0 + torch.sqrt(1.0 - ab_next) * eps

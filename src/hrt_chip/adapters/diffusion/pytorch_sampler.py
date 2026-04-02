@@ -19,11 +19,15 @@ from hrt_chip.diffusion import (
     SamplerProvenance,
 )
 from hrt_chip.training.checkpoint import load_checkpoint, read_dataset_version_from_manifest
-from hrt_chip.training.schedule import p_sample_step_eps, subsampled_reverse_timesteps
+from hrt_chip.training.schedule import (
+    build_reverse_timestep_list,
+    ddim_step_eps,
+    p_sample_step_eps,
+)
 
 
 class PyTorchDDPMSampler:
-    """Loads a trained ε-model checkpoint and runs reverse diffusion."""
+    """Loads a trained ε-model checkpoint and runs reverse diffusion (DDPM and/or DDIM)."""
 
     sampler_name = "pytorch_ddpm_sampler"
     generation_mode = "simultaneous_diffusion"
@@ -36,6 +40,8 @@ class PyTorchDDPMSampler:
         training_dataset_version: str | None = None,
         model_architecture: str | None = None,
         diffusion_inference_steps: int | None = None,
+        sampler_mode: str = "ddpm_subsampled",
+        diffusion_reverse_schedule: str | None = None,
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path)
         dev = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,6 +63,8 @@ class PyTorchDDPMSampler:
         else:
             self.model_architecture = model_architecture or "baseline_gnn"
         self.diffusion_inference_steps = diffusion_inference_steps
+        self.sampler_mode = sampler_mode
+        self.diffusion_reverse_schedule = diffusion_reverse_schedule
 
     @torch.no_grad()
     def sample_batch(self, request: DiffusionSampleRequest) -> SampleBatch:
@@ -66,17 +74,27 @@ class PyTorchDDPMSampler:
         x_attr = node_features_from_wh(wh)
         edge_index = complete_edge_index(n).to(self.device)
 
-        out_candidates: list[CandidateSample] = []
-        T = self.sched.num_timesteps
-        rev_steps = subsampled_reverse_timesteps(
-            num_timesteps=T,
-            num_inference_steps=self.diffusion_inference_steps,
-        )
-        eff_steps = len(rev_steps)
+        mode = (request.sampler_mode or self.sampler_mode).lower()
+        if mode not in ("ddpm_full", "ddpm_subsampled", "ddim"):
+            mode = "ddpm_subsampled"
 
+        inf_steps = request.diffusion_inference_steps
+        if inf_steps is None:
+            inf_steps = self.diffusion_inference_steps
+
+        T = self.sched.num_timesteps
+        rev_steps, sched_desc = build_reverse_timestep_list(
+            num_timesteps=T,
+            sampler_mode=mode,
+            num_inference_steps=inf_steps,
+            custom_indices=request.reverse_timestep_indices,
+            custom_schedule_str=self.diffusion_reverse_schedule,
+        )
+        eff_visits = len(rev_steps)
+
+        out_candidates: list[CandidateSample] = []
         for idx in range(request.num_candidates):
             g = torch.Generator(device=self.device)
-            # Deterministic per-candidate stream (compatible with sweep seeds).
             g.manual_seed(int(request.seed) + idx * 1_000_003)
 
             data = Data(
@@ -88,9 +106,17 @@ class PyTorchDDPMSampler:
             batch = Batch.from_data_list([data])
 
             x = torch.randn(n, 2, generator=g, device=self.device, dtype=torch.float32)
-            for t_scalar in rev_steps:
-                t_node = torch.full((n,), t_scalar, device=self.device, dtype=torch.long)
-                x = p_sample_step_eps(self.model, x, t_scalar, self.sched, batch, t_node)
+
+            if mode == "ddim":
+                for i in range(len(rev_steps) - 1):
+                    t_cur = rev_steps[i]
+                    t_next = rev_steps[i + 1]
+                    t_node = torch.full((n,), t_cur, device=self.device, dtype=torch.long)
+                    x = ddim_step_eps(self.model, x, t_cur, t_next, self.sched, batch, t_node)
+            else:
+                for t_scalar in rev_steps:
+                    t_node = torch.full((n,), t_scalar, device=self.device, dtype=torch.long)
+                    x = p_sample_step_eps(self.model, x, t_scalar, self.sched, batch, t_node)
 
             centers = tuple(
                 MacroCenter(name=specs[i].name, cx=float(x[i, 0].item()), cy=float(x[i, 1].item()))
@@ -120,12 +146,14 @@ class PyTorchDDPMSampler:
             coord_space=COORD_SPACE_NORMALIZED,
             seed=request.seed,
             num_candidates=request.num_candidates,
-            diffusion_steps=eff_steps,
+            diffusion_steps=eff_visits,
             guidance=guidance_dict,
             objective_bias=objective_bias_dict,
             checkpoint_path=str(self.checkpoint_path.resolve()),
             training_dataset_version=self.training_dataset_version,
             model_architecture=self.model_architecture,
+            sampler_mode=mode,
+            reverse_schedule_description=sched_desc,
         )
         return SampleBatch(candidates=tuple(out_candidates), provenance=prov)
 
@@ -138,4 +166,6 @@ def build_pytorch_sampler(config: RunConfig) -> PyTorchDDPMSampler:
         training_dataset_version=config.training_dataset_version,
         model_architecture=config.model_architecture,
         diffusion_inference_steps=config.diffusion_inference_steps,
+        sampler_mode=config.sampler_mode,
+        diffusion_reverse_schedule=config.diffusion_reverse_schedule,
     )

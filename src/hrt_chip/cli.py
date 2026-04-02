@@ -23,12 +23,14 @@ from hrt_chip.config import (
     MixedSizeBackendName,
     RunConfig,
     SamplerBackend,
+    SamplerMode,
     SelectionPolicy,
     SyntheticCurriculum,
     SyntheticDatasetConfig,
     TrainingConfig,
 )
 from hrt_chip.pipeline import replay_from_manifest, run_pipeline
+from hrt_chip.sweep_trends import default_trends_path, load_recent_trends, summarize_trends
 
 app = typer.Typer(no_args_is_help=True, help="HRT macro placement pipeline.")
 console = Console()
@@ -50,6 +52,18 @@ def _parse_guidance_weight_triples(values: list[str] | None) -> tuple[tuple[floa
             raise typer.BadParameter(f"Invalid floats in {raw!r}") from e
         out.append((a, b, g))
     return tuple(out)
+
+
+def _parse_runtime_budget_fractions(raw: str | None) -> dict[str, float] | None:
+    if raw is None or not str(raw).strip():
+        return None
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    if len(parts) != 5:
+        raise typer.BadParameter(
+            "Expected five comma-separated floats: generation,legalization,mixed_size,evaluation,reserve"
+        )
+    keys = ("generation", "legalization", "mixed_size", "evaluation", "reserve")
+    return {k: float(p) for k, p in zip(keys, parts, strict=True)}
 
 
 @app.command()
@@ -204,6 +218,38 @@ def run(
         "--trends-log-path",
         help="Optional JSONL path for sweep trend lines (used by benchmark-sweep).",
     ),
+    sampler_mode: str = typer.Option(
+        "ddpm_subsampled",
+        "--sampler-mode",
+        help="pytorch_checkpoint only: ddpm_full | ddpm_subsampled | ddim.",
+    ),
+    diffusion_reverse_schedule: Optional[str] = typer.Option(
+        None,
+        "--diffusion-reverse-schedule",
+        help="Optional comma-separated reverse timesteps (e.g. 999,500,0) for pytorch_checkpoint.",
+    ),
+    pre_eval_rejection: bool = typer.Option(
+        False,
+        "--pre-eval-rejection/--no-pre-eval-rejection",
+        help="Skip official eval for illegal / high-overlap / bad-surrogate candidates.",
+    ),
+    pre_eval_max_hard_overlap_pairs: Optional[int] = typer.Option(
+        None,
+        "--pre-eval-max-hard-overlap-pairs",
+        help="With --pre-eval-rejection, skip eval when hard overlap pairs exceed this.",
+    ),
+    pre_eval_surrogate_composite_max: Optional[float] = typer.Option(
+        None,
+        "--pre-eval-surrogate-composite-max",
+        help="With --pre-eval-rejection, skip eval when surrogate composite exceeds this.",
+    ),
+    runtime_budget_fractions: Optional[str] = typer.Option(
+        None,
+        "--runtime-budget-fractions",
+        help="Five comma-separated stage fractions: generation,legalization,mixed_size,evaluation,reserve.",
+    ),
+    experiment_tag: Optional[str] = typer.Option(None, "--experiment-tag", help="Label stored in results / sweeps."),
+    experiment_notes: Optional[str] = typer.Option(None, "--experiment-notes", help="Free-form experiment notes."),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
@@ -218,7 +264,10 @@ def run(
         raise typer.BadParameter("--selection-policy must be proxy_first or ppa_priority")
     if artifact_retention not in ("full", "compact", "best_only"):
         raise typer.BadParameter("--artifact-retention must be full, compact, or best_only")
+    if sampler_mode not in ("ddpm_full", "ddpm_subsampled", "ddim"):
+        raise typer.BadParameter("--sampler-mode must be ddpm_full, ddpm_subsampled, or ddim")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
+    rbf = _parse_runtime_budget_fractions(runtime_budget_fractions)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     cfg = RunConfig(
         benchmark_id=benchmark,
@@ -243,6 +292,14 @@ def run(
         selection_policy=cast(SelectionPolicy, selection_policy),
         diffusion_inference_steps=diffusion_inference_steps,
         trends_log_path=trends_log_path,
+        sampler_mode=cast(SamplerMode, sampler_mode),
+        diffusion_reverse_schedule=diffusion_reverse_schedule,
+        pre_eval_rejection_enabled=pre_eval_rejection,
+        pre_eval_max_hard_overlap_pairs=pre_eval_max_hard_overlap_pairs,
+        pre_eval_surrogate_composite_max=pre_eval_surrogate_composite_max,
+        runtime_budget_stage_fractions=rbf,
+        experiment_tag=experiment_tag,
+        experiment_notes=experiment_notes,
         dreamplace_docker_image=dreamplace_docker_image or RunConfig.dreamplace_docker_image,
         dreamplace_real_docker_image=dreamplace_real_docker_image
         or RunConfig.dreamplace_real_docker_image,
@@ -525,6 +582,38 @@ def benchmark_sweep_cmd(
         "--trends-log-path",
         help="Append gate summary JSON lines (default runs/trends/sweep_history.jsonl if unset).",
     ),
+    sampler_mode: str = typer.Option(
+        "ddpm_subsampled",
+        "--sampler-mode",
+        help="pytorch_checkpoint only: ddpm_full | ddpm_subsampled | ddim.",
+    ),
+    diffusion_reverse_schedule: Optional[str] = typer.Option(
+        None,
+        "--diffusion-reverse-schedule",
+        help="Optional comma-separated reverse timesteps for pytorch_checkpoint.",
+    ),
+    pre_eval_rejection: bool = typer.Option(
+        False,
+        "--pre-eval-rejection/--no-pre-eval-rejection",
+        help="Skip official eval for obvious losers when surrogates indicate bad quality.",
+    ),
+    pre_eval_max_hard_overlap_pairs: Optional[int] = typer.Option(
+        None,
+        "--pre-eval-max-hard-overlap-pairs",
+        help="With --pre-eval-rejection, skip eval when hard overlap pairs exceed this.",
+    ),
+    pre_eval_surrogate_composite_max: Optional[float] = typer.Option(
+        None,
+        "--pre-eval-surrogate-composite-max",
+        help="With --pre-eval-rejection, skip eval when surrogate composite exceeds this.",
+    ),
+    runtime_budget_fractions: Optional[str] = typer.Option(
+        None,
+        "--runtime-budget-fractions",
+        help="Five comma-separated stage fractions for runtime budget accounting.",
+    ),
+    experiment_tag: Optional[str] = typer.Option(None, "--experiment-tag"),
+    experiment_notes: Optional[str] = typer.Option(None, "--experiment-notes"),
 ) -> None:
     """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
     if evaluator not in ("stub", "official"):
@@ -537,7 +626,10 @@ def benchmark_sweep_cmd(
         raise typer.BadParameter("--selection-policy must be proxy_first or ppa_priority")
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
+    if sampler_mode not in ("ddpm_full", "ddpm_subsampled", "ddim"):
+        raise typer.BadParameter("--sampler-mode must be ddpm_full, ddpm_subsampled, or ddim")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
+    rbf = _parse_runtime_budget_fractions(runtime_budget_fractions)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     base = RunConfig(
         benchmark_id="ibm01",
@@ -559,6 +651,14 @@ def benchmark_sweep_cmd(
         selection_policy=cast(SelectionPolicy, selection_policy),
         diffusion_inference_steps=diffusion_inference_steps,
         trends_log_path=trends_log_path,
+        sampler_mode=cast(SamplerMode, sampler_mode),
+        diffusion_reverse_schedule=diffusion_reverse_schedule,
+        pre_eval_rejection_enabled=pre_eval_rejection,
+        pre_eval_max_hard_overlap_pairs=pre_eval_max_hard_overlap_pairs,
+        pre_eval_surrogate_composite_max=pre_eval_surrogate_composite_max,
+        runtime_budget_stage_fractions=rbf,
+        experiment_tag=experiment_tag,
+        experiment_notes=experiment_notes,
         dreamplace_docker_image=dreamplace_docker_image or RunConfig.dreamplace_docker_image,
         dreamplace_real_docker_image=dreamplace_real_docker_image
         or RunConfig.dreamplace_real_docker_image,
@@ -668,6 +768,44 @@ def benchmark_sweep_cmd(
     )
     if meta.get("errors"):
         console.print("[yellow]Some benchmarks raised exceptions; see sweep_report.json[/yellow]")
+
+
+@app.command("trends-report")
+def trends_report_cmd(
+    trends_log: Optional[Path] = typer.Option(
+        None,
+        "--trends-log",
+        help="JSONL path (default: runs/trends/sweep_history.jsonl).",
+    ),
+    limit: int = typer.Option(40, "--limit", "-n", help="How many recent lines to load."),
+    baseline_sweep_id: Optional[str] = typer.Option(
+        None,
+        "--baseline-sweep-id",
+        help="Optional sweep_id to compare last mean_proxy against.",
+    ),
+) -> None:
+    """Summarize recent sweep trend lines (gates, mean proxy, runtime)."""
+    path = trends_log if trends_log is not None else default_trends_path()
+    rows = load_recent_trends(path, limit=limit)
+    summary = summarize_trends(rows, baseline_sweep_id=baseline_sweep_id)
+    console.print(f"[bold]Trends log[/bold]: {path.resolve()}")
+    for k in sorted(summary.keys()):
+        console.print(f"  {k}: {summary[k]}")
+    table = Table(title="Recent sweeps (oldest → newest)")
+    table.add_column("recorded_at")
+    table.add_column("sweep_id")
+    table.add_column("GateA")
+    table.add_column("mean_proxy")
+    table.add_column("total_s")
+    for r in rows:
+        table.add_row(
+            str(r.get("recorded_at_utc", ""))[:19],
+            str(r.get("sweep_id", ""))[:36],
+            "Y" if r.get("gate_a_legal_all") else "N",
+            "—" if r.get("mean_proxy") is None else f"{float(r['mean_proxy']):.4f}",
+            "—" if r.get("total_runtime_seconds") is None else f"{float(r['total_runtime_seconds']):.1f}",
+        )
+    console.print(table)
 
 
 def main() -> None:

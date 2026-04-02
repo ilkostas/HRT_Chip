@@ -26,6 +26,9 @@ ModelArchitecture = Literal["baseline_gnn", "res_gnn", "att_gnn"]
 # Phase 4: pipeline sampler backend.
 SamplerBackend = Literal["stub", "pytorch_checkpoint"]
 
+# PyTorch reverse diffusion: full DDPM, subsampled DDPM steps, or DDIM jumps.
+SamplerMode = Literal["ddpm_full", "ddpm_subsampled", "ddim"]
+
 # Phase 5: tier-1 evaluator (stub for dev; official requires macro_place + MacroPlacement testcases).
 EvaluatorBackend = Literal["stub", "official"]
 
@@ -211,6 +214,37 @@ class RunConfig:
     diffusion_inference_steps: int | None = None
     """Optional cap on reverse-diffusion steps for ``pytorch_checkpoint`` sampler (accelerated sampling)."""
 
+    sampler_mode: SamplerMode = "ddpm_subsampled"
+    """``ddpm_full``: full ``T`` ancestral steps; ``ddpm_subsampled``: fewer DDPM steps; ``ddim``: deterministic DDIM jumps."""
+
+    diffusion_reverse_schedule: str | None = None
+    """
+    Optional explicit reverse timestep list for pytorch sampler, high→low, comma-separated
+    (e.g. ``1000,500,250,0``). Must be valid indices in ``[0, T-1]``; last step should include ``0``.
+    When set, overrides uniform subsampling for ``ddpm_subsampled`` / ``ddim``.
+    """
+
+    ddim_eta: float = 0.0
+    """DDIM stochasticity (0 = deterministic). Reserved for future; current implementation uses ``eta=0``."""
+
+    runtime_budget_stage_fractions: dict[str, float] | None = None
+    """Optional overrides for generation/legalization/mixed_size/evaluation/reserve fractions (sum ≤ 1)."""
+
+    pre_eval_rejection_enabled: bool = False
+    """If True, skip expensive evaluator for obviously bad candidates (overlap / surrogate gates)."""
+
+    pre_eval_max_hard_overlap_pairs: int | None = None
+    """Skip official eval when ``hard_overlap_pairs`` exceeds this after legalization (None = no gate)."""
+
+    pre_eval_surrogate_composite_max: float | None = None
+    """Skip eval when surrogate composite is finite and above this threshold (None = no gate)."""
+
+    experiment_tag: str | None = None
+    """Optional label stored in sweep metadata / trends."""
+
+    experiment_notes: str | None = None
+    """Free-form notes stored in sweep_report extra."""
+
     trends_log_path: str | None = None
     """Append-only JSONL path for sweep trend lines (default: runs/trends/sweep_history.jsonl)."""
 
@@ -231,6 +265,15 @@ class RunConfig:
         d["mixed_size_backend"] = self.mixed_size_backend
         d["selection_policy"] = self.selection_policy
         d["diffusion_inference_steps"] = self.diffusion_inference_steps
+        d["sampler_mode"] = self.sampler_mode
+        d["diffusion_reverse_schedule"] = self.diffusion_reverse_schedule
+        d["ddim_eta"] = self.ddim_eta
+        d["runtime_budget_stage_fractions"] = self.runtime_budget_stage_fractions
+        d["pre_eval_rejection_enabled"] = self.pre_eval_rejection_enabled
+        d["pre_eval_max_hard_overlap_pairs"] = self.pre_eval_max_hard_overlap_pairs
+        d["pre_eval_surrogate_composite_max"] = self.pre_eval_surrogate_composite_max
+        d["experiment_tag"] = self.experiment_tag
+        d["experiment_notes"] = self.experiment_notes
         d["trends_log_path"] = self.trends_log_path
         d["dreamplace_docker_image"] = self.dreamplace_docker_image
         d["dreamplace_real_docker_image"] = self.dreamplace_real_docker_image
@@ -272,6 +315,15 @@ class RunConfig:
         out.setdefault("mixed_size_backend", "estimate")
         out.setdefault("selection_policy", "proxy_first")
         out.setdefault("diffusion_inference_steps", None)
+        out.setdefault("sampler_mode", "ddpm_subsampled")
+        out.setdefault("diffusion_reverse_schedule", None)
+        out.setdefault("ddim_eta", 0.0)
+        out.setdefault("runtime_budget_stage_fractions", None)
+        out.setdefault("pre_eval_rejection_enabled", False)
+        out.setdefault("pre_eval_max_hard_overlap_pairs", None)
+        out.setdefault("pre_eval_surrogate_composite_max", None)
+        out.setdefault("experiment_tag", None)
+        out.setdefault("experiment_notes", None)
         out.setdefault("trends_log_path", None)
         out.setdefault("dreamplace_docker_image", "hrt-chip-dreamplace:local")
         out.setdefault("dreamplace_real_docker_image", "hrt-chip-dreamplace-real:local")

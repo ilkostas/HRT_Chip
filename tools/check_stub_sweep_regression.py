@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI helper: run a minimal stub benchmark sweep and assert Gate A (100% legal)."""
+"""CI helper: run a minimal stub benchmark sweep and assert Gate A + trend record quality."""
 
 from __future__ import annotations
 
@@ -48,7 +48,47 @@ def main() -> int:
         if not trends.is_file():
             print("FAIL: trends log missing", file=sys.stderr)
             return 1
-    print("OK: stub sweep Gate A + trends log")
+        lines = [ln for ln in trends.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if not lines:
+            print("FAIL: trends log empty", file=sys.stderr)
+            return 1
+        last = json.loads(lines[-1])
+        required = (
+            "sweep_id",
+            "gate_a_legal_all",
+            "mean_proxy",
+            "total_runtime_seconds",
+            "recorded_at_utc",
+        )
+        for k in required:
+            if k not in last:
+                print(f"FAIL: trends line missing key {k!r}", file=sys.stderr)
+                return 1
+        if not last.get("gate_a_legal_all"):
+            print("FAIL: trend line Gate A not true", file=sys.stderr)
+            return 1
+        mp = last.get("mean_proxy")
+        if not isinstance(mp, (int, float)):
+            print("FAIL: mean_proxy not numeric in trends", file=sys.stderr)
+            return 1
+        # Loose stub sanity: deterministic stub should stay in a stable band across runs.
+        if float(mp) > 1e6:
+            print(f"FAIL: mean_proxy absurdly large: {mp}", file=sys.stderr)
+            return 1
+        # Per-row timing from pipeline results
+        rows = data.get("rows") or []
+        if len(rows) < 2:
+            print("FAIL: expected at least two benchmark rows", file=sys.stderr)
+            return 1
+        for row in rows:
+            if row.get("error"):
+                continue
+            tim = row.get("timing")
+            if not isinstance(tim, dict) or "generation_seconds" not in tim:
+                print("FAIL: row missing timing.generation_seconds", file=sys.stderr)
+                print(json.dumps(row, indent=2), file=sys.stderr)
+                return 1
+    print("OK: stub sweep Gate A + trends integrity + timing rows")
     return 0
 
 

@@ -93,6 +93,7 @@ class BenchmarkRow:
     runtime_seconds: float
     error: str | None = None
     run_id: str | None = None
+    timing: dict[str, Any] | None = None
 
 
 @dataclass
@@ -150,6 +151,7 @@ class SweepReport:
                     "runtime_seconds": r.runtime_seconds,
                     "error": r.error,
                     "run_id": r.run_id,
+                    "timing": r.timing,
                 }
                 for r in self.rows
             ],

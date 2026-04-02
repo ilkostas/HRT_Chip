@@ -63,6 +63,11 @@ def run_ibm_benchmark_sweep(
                 overlaps = 1
             elif overlaps is None:
                 overlaps = 0
+            timing = results.get("timing")
+            if isinstance(timing, dict):
+                timing_dict: dict[str, Any] | None = dict(timing)
+            else:
+                timing_dict = None
             rows.append(
                 BenchmarkRow(
                     benchmark_id=bid,
@@ -72,6 +77,7 @@ def run_ibm_benchmark_sweep(
                     runtime_seconds=dt,
                     error=None,
                     run_id=str((results.get("manifest") or {}).get("run_id", "")),
+                    timing=timing_dict,
                 )
             )
         except Exception as e:  # noqa: BLE001 — report row + continue
@@ -98,6 +104,8 @@ def run_ibm_benchmark_sweep(
             "errors": errors,
             "aggregate_sa_proxy": AGGREGATE_SA_PROXY,
             "aggregate_replace_proxy": AGGREGATE_REPLACE_PROXY,
+            "experiment_tag": base_config.experiment_tag,
+            "experiment_notes": base_config.experiment_notes,
         },
     )
     rd = report.to_dict()
@@ -113,6 +121,8 @@ def run_ibm_benchmark_sweep(
         "total_count": report.gates.total_count,
         "mean_runtime_seconds": report.mean_runtime_seconds,
         "total_runtime_seconds": report.total_runtime_seconds,
+        "experiment_tag": base_config.experiment_tag,
+        "experiment_notes": base_config.experiment_notes,
     }
     append_sweep_trend(trend_payload, log_path=base_config.trends_log_path)
     return report, {"sweep_root": sweep_root, "errors": errors}

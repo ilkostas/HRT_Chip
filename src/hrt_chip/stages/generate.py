@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from typing import Any, Sequence
 
 from hrt_chip.diffusion import (
@@ -50,6 +51,11 @@ def generate_candidates(
     sampler: DiffusionSampler | None = None,
     guidance_sweep: Sequence[tuple[float, float, float]] | None = None,
     objective_bias: GuidanceObjectiveBias | None = None,
+    should_continue_sweep: Callable[[int], bool] | None = None,
+    guidance_sweep_index_offset: int = 0,
+    diffusion_inference_steps_override: int | None = None,
+    sampler_mode_override: str | None = None,
+    reverse_timestep_indices: tuple[int, ...] | None = None,
 ) -> list[PlacementCandidate]:
     """
     Produce ``num_candidates`` placement hypotheses per weight vector using the diffusion sampler.
@@ -74,9 +80,12 @@ def generate_candidates(
 
     out: list[PlacementCandidate] = []
     for si, (a, b, g) in enumerate(sweep):
-        sub_seed = derive_sweep_seed(seed, si, (a, b, g))
+        if should_continue_sweep is not None and not should_continue_sweep(si):
+            break
+        eff_si = guidance_sweep_index_offset + si
+        sub_seed = derive_sweep_seed(seed, eff_si, (a, b, g))
         gctx = GuidanceContext(
-            sweep_index=si,
+            sweep_index=eff_si,
             alpha_hpwl=a,
             beta_congestion=b,
             gamma_legality=g,
@@ -90,6 +99,9 @@ def generate_candidates(
             diffusion_steps=diffusion_steps,
             guidance=gctx,
             objective_bias=objective_bias,
+            diffusion_inference_steps=diffusion_inference_steps_override,
+            sampler_mode=sampler_mode_override,
+            reverse_timestep_indices=reverse_timestep_indices,
         )
         batch = smp.sample_batch(req)
         prov = batch.provenance.to_dict()
@@ -104,13 +116,17 @@ def generate_candidates(
                 )
                 macros.append(MacroRect(name=spec.name, x=x, y=y, w=spec.w, h=spec.h))
             # Multi-sweep: prefix for global uniqueness; single-sweep: legacy ids (Phase 2 compat).
-            cand_id = cs.candidate_id if len(sweep) == 1 else f"s{si:02d}_{cs.candidate_id}"
+            cand_id = (
+                cs.candidate_id
+                if len(sweep) == 1 and guidance_sweep_index_offset == 0
+                else f"s{eff_si:02d}_{cs.candidate_id}"
+            )
             meta: dict[str, Any] = {
                 "stage": "generated",
                 "sampler": prov,
                 "normalized_centers": normalized_centers,
                 "guidance": {
-                    "sweep_index": si,
+                    "sweep_index": eff_si,
                     "alpha_hpwl": a,
                     "beta_congestion": b,
                     "gamma_legality": g,

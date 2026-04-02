@@ -7,16 +7,20 @@ from typing import Any
 from hrt_chip.config import RunConfig
 
 
-def _estimated_seconds_per_candidate(config: RunConfig) -> float:
-    """Rough lower bound for scheduling; tune with profiling on official + mixed-size."""
-    base = 0.5 if config.evaluator_backend == "stub" else 12.0
+def estimated_generation_seconds_per_candidate(config: RunConfig) -> float:
+    """Rough CPU/GPU time for diffusion generation only (per candidate)."""
     if config.sampler_backend == "pytorch_checkpoint":
         steps = max(1, int(config.diffusion_steps))
         inferred = config.diffusion_inference_steps
-        eff_steps = steps if inferred is None else min(steps, max(1, int(inferred)))
-        base += eff_steps * 0.008
-    else:
-        base += 0.05
+        eff = steps if inferred is None else min(steps, max(1, int(inferred)))
+        return max(0.02, eff * 0.008)
+    return 0.05
+
+
+def _estimated_seconds_per_candidate(config: RunConfig) -> float:
+    """Rough lower bound for scheduling; tune with profiling on official + mixed-size."""
+    base = 0.5 if config.evaluator_backend == "stub" else 12.0
+    base += estimated_generation_seconds_per_candidate(config)
     if config.mixed_size_backend == "estimate":
         base += 0.2
     elif config.mixed_size_backend == "stub":

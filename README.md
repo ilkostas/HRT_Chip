@@ -165,9 +165,9 @@ uv run hrt-chip run --benchmark ibm01 --artifact-retention best_only --output-di
 - **`results.json` schema:** `results_schema_version` and required keys are documented in [`docs/baseline-artifacts.md`](docs/baseline-artifacts.md); validate with [`src/hrt_chip/io/baseline_schema.py`](src/hrt_chip/io/baseline_schema.py).
 - **Surrogates:** with `--evaluator official`, scoring-table HPWL/congestion use **exact pin-group HPWL** and **RUDY over pin bboxes** when the `Benchmark` exposes `net_pin_dx` / `net_pin_dy` (aligned with `net_nodes`); otherwise `phi_hpwl`/`phi_congestion` are `null` and `surrogate_mode` is `netlist_pins_missing`. Legality splits **hard overlap pair count** vs **smooth squared-overlap penalty**. `results.json` includes **`surrogate_proxy_alignment`** (Spearman/Kendall vs weighted surrogate composite). Stub runs keep bbox/grid fallbacks.
 - **Mixed-size:** default **`--mixed-size-backend estimate`** (macro utilization + RUDY proxy + timing); use **`stub`** for no-op CI/smoke.
-- **Budget:** optional **`--wall-clock-budget-seconds`** shrinks per-vector candidate count or the guidance sweep (see [`src/hrt_chip/budget.py`](src/hrt_chip/budget.py)).
-- **Accelerated DDPM inference:** **`--diffusion-inference-steps`** (with `--sampler-backend pytorch_checkpoint`) subsamples reverse timesteps.
-- **Sweep trends:** each **`benchmark-sweep`** appends a JSON line to **`runs/trends/sweep_history.jsonl`** (override with **`--trends-log-path`**).
+- **Budget:** optional **`--wall-clock-budget-seconds`** shrinks per-vector candidate count or the guidance sweep (see [`src/hrt_chip/budget.py`](src/hrt_chip/budget.py)); at run time, [`runtime_budget.py`](src/hrt_chip/runtime_budget.py) can stop further guidance vectors if eval would exceed the wall clock.
+- **Sampling:** with **`--sampler-backend pytorch_checkpoint`**, use **`--diffusion-inference-steps`** (subsampled DDPM), **`--sampler-mode`** (`ddpm_full` | `ddpm_subsampled` | `ddim`), and optional **`--diffusion-reverse-schedule`** (comma-separated timestep indices).
+- **Sweep trends:** each **`benchmark-sweep`** appends a JSON line to **`runs/trends/sweep_history.jsonl`** (override with **`--trends-log-path`**). Summarize with **`hrt-chip trends-report`**.
 - **Synthetic curriculum:** **`hrt-chip dataset-generate --curriculum benchmark_like`** uses heavy-tail sizes, random legal packing, and **6-D** node features (WH + spatial degree); default remains **`grid_v1`**.
 
 ## Official evaluator (optional)

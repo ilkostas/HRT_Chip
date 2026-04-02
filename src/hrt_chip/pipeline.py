@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from hrt_chip.adapters.evaluator.base import EvaluatorAdapter
+from hrt_chip.adapters.evaluator.base import EvaluatorAdapter, EvaluationResult
 from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.dreamplace_docker import (
@@ -21,6 +21,7 @@ from hrt_chip.budget import resolve_generation_budget
 from hrt_chip.config import RunConfig, resolved_guidance_sweep
 from hrt_chip.deterministic_runtime import apply_pipeline_determinism
 from hrt_chip.diffusion import DiffusionSampler
+from hrt_chip.models import PlacementCandidate
 from hrt_chip.geometry import placement_is_legal
 from hrt_chip.guidance import composite_guidance_objective, compute_objectives_for_candidate
 from hrt_chip import mixed_size_metrics as msm
@@ -33,6 +34,7 @@ from hrt_chip.io.artifacts import (
 )
 from hrt_chip.io.baseline_schema import attach_results_schema_version
 from hrt_chip.replay_verify import compare_replay_to_baseline
+from hrt_chip.runtime_budget import RuntimeBudgetManager
 from hrt_chip.stages.evaluate import evaluate_candidate
 from hrt_chip.stages.generate import generate_candidates
 from hrt_chip.stages.legalize import legalize_candidate
@@ -140,117 +142,202 @@ def run_pipeline(
     budget_resolution_seconds = time.perf_counter() - t_budget0
 
     smp = _resolve_sampler(config, sampler)
-    t_gen0 = time.perf_counter()
-    raw = generate_candidates(
-        benchmark_id=config.benchmark_id,
-        seed=config.seed,
-        num_candidates=num_candidates_eff,
-        macro_specs=macro_specs_arg,
-        canvas_w=canvas_w,
-        canvas_h=canvas_h,
-        diffusion_steps=config.diffusion_steps,
-        guidance_sweep=sweep,
-        sampler=smp,
-    )
-    generation_seconds = time.perf_counter() - t_gen0
+    runtime_budget = RuntimeBudgetManager.from_config(config, start_perf=t_pipeline0)
 
+    generation_seconds = 0.0
+    legalization_seconds = 0.0
+    mixed_size_seconds = 0.0
+    evaluation_seconds = 0.0
+
+    raw: list[PlacementCandidate] = []
     evaluations: list[dict[str, Any]] = []
     scoring_table: list[dict[str, Any]] = []
     alignment_scratch: list[dict[str, Any]] = []
 
-    legalize_eval_seconds = 0.0
-    for cand in raw:
-        t_le = time.perf_counter()
-        legalize_candidate(cand, canvas_w=canvas_w, canvas_h=canvas_h)
-        if bench_obj is not None:
-            from hrt_chip.official_benchmark import restore_fixed_macro_positions
+    pre_eval_skipped = 0
+    sweep_vectors_used = 0
 
-            restore_fixed_macro_positions(cand, bench_obj)
-        legal_flag = cand.metadata.get("legal") is True
-        geom_ok = placement_is_legal(cand.macros, canvas_w=canvas_w, canvas_h=canvas_h)
-        assert legal_flag == geom_ok, (
-            "legality metadata must match geometry check (legal flag vs placement_is_legal)"
+    def _should_continue_sweep(si: int) -> bool:
+        if runtime_budget is None:
+            return True
+        return runtime_budget.can_generate_next_sweep_vector(
+            config,
+            num_candidates_this_vector=num_candidates_eff,
+            already_generated_unprocessed=0,
         )
-        if legal_flag:
-            req = MixedSizeRequest(
-                benchmark_id=config.benchmark_id,
-                fixed_macros=list(cand.macros),
-                seed=config.seed,
+
+    for si, _weights in enumerate(sweep):
+        if not _should_continue_sweep(si):
+            break
+        inf_override: int | None = None
+        mode_override: str | None = None
+        if config.sampler_backend == "pytorch_checkpoint":
+            mode_override = config.sampler_mode
+            if runtime_budget is not None:
+                inf_override = runtime_budget.recommended_diffusion_inference_steps(
+                    base_steps=config.diffusion_inference_steps,
+                    training_timesteps=config.diffusion_steps,
+                )
+            else:
+                inf_override = config.diffusion_inference_steps
+        t_gen0 = time.perf_counter()
+        chunk = generate_candidates(
+            benchmark_id=config.benchmark_id,
+            seed=config.seed,
+            num_candidates=num_candidates_eff,
+            macro_specs=macro_specs_arg,
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+            diffusion_steps=config.diffusion_steps,
+            guidance_sweep=(sweep[si],),
+            sampler=smp,
+            should_continue_sweep=None,
+            guidance_sweep_index_offset=si,
+            diffusion_inference_steps_override=inf_override,
+            sampler_mode_override=mode_override,
+        )
+        generation_seconds += time.perf_counter() - t_gen0
+        sweep_vectors_used += 1
+        if runtime_budget is not None:
+            runtime_budget.record("generation", time.perf_counter() - t_gen0)
+
+        for cand in chunk:
+            t_pipe0 = time.perf_counter()
+            t_le = time.perf_counter()
+            legalize_candidate(cand, canvas_w=canvas_w, canvas_h=canvas_h)
+            if bench_obj is not None:
+                from hrt_chip.official_benchmark import restore_fixed_macro_positions
+
+                restore_fixed_macro_positions(cand, bench_obj)
+            legal_flag = cand.metadata.get("legal") is True
+            geom_ok = placement_is_legal(cand.macros, canvas_w=canvas_w, canvas_h=canvas_h)
+            assert legal_flag == geom_ok, (
+                "legality metadata must match geometry check (legal flag vs placement_is_legal)"
+            )
+            legalization_seconds += time.perf_counter() - t_le
+            if runtime_budget is not None:
+                runtime_budget.record("legalization", time.perf_counter() - t_le)
+
+            t_ms0 = time.perf_counter()
+            if legal_flag:
+                req = MixedSizeRequest(
+                    benchmark_id=config.benchmark_id,
+                    fixed_macros=list(cand.macros),
+                    seed=config.seed,
+                    benchmark=bench_obj,
+                    canvas_w=canvas_w,
+                    canvas_h=canvas_h,
+                    candidate_id=cand.candidate_id,
+                    work_dir_host=mixed_size_work_root,
+                    testcase_root_host=Path(testcase_path),
+                )
+                ms_result = ms.run(req)
+                ms.attach_to_candidate(cand, ms_result)
+            else:
+                cand.metadata["mixed_size"] = {
+                    "ok": False,
+                    "message": "skipped: macro placement not legal (overlaps or out of bounds)",
+                    "extra": {"benchmark_id": config.benchmark_id, "n_macros": len(cand.macros)},
+                }
+            mixed_size_seconds += time.perf_counter() - t_ms0
+            if runtime_budget is not None:
+                runtime_budget.record("mixed_size", time.perf_counter() - t_ms0)
+
+            objs = compute_objectives_for_candidate(
+                cand,
                 benchmark=bench_obj,
                 canvas_w=canvas_w,
                 canvas_h=canvas_h,
-                candidate_id=cand.candidate_id,
-                work_dir_host=mixed_size_work_root,
-                testcase_root_host=Path(testcase_path),
             )
-            ms_result = ms.run(req)
-            ms.attach_to_candidate(cand, ms_result)
-        else:
-            cand.metadata["mixed_size"] = {
-                "ok": False,
-                "message": "skipped: macro placement not legal (overlaps or out of bounds)",
-                "extra": {"benchmark_id": config.benchmark_id, "n_macros": len(cand.macros)},
-            }
+            guidance_meta = cand.metadata.get("guidance")
+            if not isinstance(guidance_meta, dict):
+                guidance_meta = {}
 
-        objs = compute_objectives_for_candidate(
-            cand,
-            benchmark=bench_obj,
-            canvas_w=canvas_w,
-            canvas_h=canvas_h,
-        )
-        guidance_meta = cand.metadata.get("guidance")
-        if not isinstance(guidance_meta, dict):
-            guidance_meta = {}
+            a_w = float(guidance_meta.get("alpha_hpwl", 1.0 / 3.0))
+            b_w = float(guidance_meta.get("beta_congestion", 1.0 / 3.0))
+            g_w = float(guidance_meta.get("gamma_legality", 1.0 / 3.0))
+            comp = composite_guidance_objective(
+                objs, alpha_hpwl=a_w, beta_congestion=b_w, gamma_legality=g_w
+            )
 
-        er = evaluate_candidate(
-            cand,
-            ev,
-            benchmark_id=config.benchmark_id,
-            run_context=run_context,
-        )
-        legalize_eval_seconds += time.perf_counter() - t_le
-        row = {
-            "candidate_id": er.candidate_id,
-            "proxy_score": er.proxy_score,
-            "legal": er.legal,
-            "details": dict(er.details),
-        }
-        evaluations.append(row)
+            skip_eval = False
+            skip_reason: str | None = None
+            if config.pre_eval_rejection_enabled:
+                if not legal_flag:
+                    skip_eval = True
+                    skip_reason = "illegal_macro"
+                else:
+                    max_ov = config.pre_eval_max_hard_overlap_pairs
+                    if max_ov is not None and objs.hard_overlap_pairs > max_ov:
+                        skip_eval = True
+                        skip_reason = "hard_overlap_pairs"
+                    max_c = config.pre_eval_surrogate_composite_max
+                    if not skip_eval and max_c is not None and comp is not None and comp > max_c:
+                        skip_eval = True
+                        skip_reason = "surrogate_composite"
 
-        scoring_table.append(
-            {
+            t_ev0 = time.perf_counter()
+            if skip_eval:
+                pre_eval_skipped += 1
+                er = EvaluationResult(
+                    candidate_id=cand.candidate_id,
+                    proxy_score=float("inf"),
+                    legal=legal_flag,
+                    details={
+                        "eval_skipped": True,
+                        "eval_skip_reason": skip_reason,
+                        "surrogate_objectives": objs.to_dict(),
+                    },
+                )
+            else:
+                er = evaluate_candidate(
+                    cand,
+                    ev,
+                    benchmark_id=config.benchmark_id,
+                    run_context=run_context,
+                )
+            evaluation_seconds += time.perf_counter() - t_ev0
+            if runtime_budget is not None:
+                runtime_budget.record("evaluation", time.perf_counter() - t_ev0)
+                runtime_budget.observe_candidate_post_generation(time.perf_counter() - t_pipe0)
+
+            row = {
                 "candidate_id": er.candidate_id,
                 "proxy_score": er.proxy_score,
                 "legal": er.legal,
-                "guidance": dict(guidance_meta),
-                "surrogate_objectives": objs.to_dict(),
+                "details": dict(er.details),
             }
-        )
+            evaluations.append(row)
 
-        a_w = float(guidance_meta.get("alpha_hpwl", 1.0 / 3.0))
-        b_w = float(guidance_meta.get("beta_congestion", 1.0 / 3.0))
-        g_w = float(guidance_meta.get("gamma_legality", 1.0 / 3.0))
-        comp = composite_guidance_objective(
-            objs, alpha_hpwl=a_w, beta_congestion=b_w, gamma_legality=g_w
-        )
-        alignment_scratch.append(
-            {
-                "candidate_id": er.candidate_id,
-                "proxy_score": er.proxy_score,
-                "legal": er.legal,
-                "composite": comp,
-            }
-        )
+            scoring_table.append(
+                {
+                    "candidate_id": er.candidate_id,
+                    "proxy_score": er.proxy_score,
+                    "legal": er.legal,
+                    "guidance": dict(guidance_meta),
+                    "surrogate_objectives": objs.to_dict(),
+                }
+            )
+
+            alignment_scratch.append(
+                {
+                    "candidate_id": er.candidate_id,
+                    "proxy_score": er.proxy_score,
+                    "legal": er.legal,
+                    "composite": comp,
+                }
+            )
+            raw.append(cand)
 
     ms_rows: list[dict[str, Any]] = []
     for cand, ev in zip(raw, evaluations, strict=True):
-        ms = cand.metadata.get("mixed_size") or {}
-        extra = ms.get("extra") if isinstance(ms.get("extra"), dict) else {}
+        ms_meta = cand.metadata.get("mixed_size") or {}
+        extra = ms_meta.get("extra") if isinstance(ms_meta.get("extra"), dict) else {}
         ms_rows.append(
             {
                 "candidate_id": cand.candidate_id,
                 "legal": ev["legal"],
-                "ms_ok": ms.get("ok") is True,
+                "ms_ok": ms_meta.get("ok") is True,
                 "ms_extra": extra,
             }
         )
@@ -353,9 +440,26 @@ def run_pipeline(
             "requested_num_candidates": config.num_candidates,
             "resolved_num_candidates": num_candidates_eff,
         },
+        "runtime_budget": runtime_budget.to_dict() if runtime_budget is not None else None,
+        "sweep_vectors_used": sweep_vectors_used,
+        "sweep_vectors_requested": len(sweep),
+        "generation_stopped_early": sweep_vectors_used < len(sweep),
+        "pre_eval_rejection": {
+            "enabled": config.pre_eval_rejection_enabled,
+            "skipped_eval_count": pre_eval_skipped,
+        },
+        "sampler_mode": config.sampler_mode,
+        "diffusion_reverse_schedule": config.diffusion_reverse_schedule,
+        "experiment_tag": config.experiment_tag,
+        "experiment_notes": config.experiment_notes,
         "timing": {
             "generation_seconds": generation_seconds,
-            "legalize_mixed_size_eval_seconds": legalize_eval_seconds,
+            "legalization_seconds": legalization_seconds,
+            "mixed_size_seconds": mixed_size_seconds,
+            "evaluation_seconds": evaluation_seconds,
+            "legalize_mixed_size_eval_seconds": legalization_seconds
+            + mixed_size_seconds
+            + evaluation_seconds,
             "total_pipeline_seconds": time.perf_counter() - t_pipeline0,
         },
     }

@@ -60,6 +60,10 @@ class DiffusionSampleRequest:
     diffusion_steps: int = 1000
     guidance: GuidanceContext | None = None
     objective_bias: GuidanceObjectiveBias | None = None
+    # Optional per-batch overrides (PyTorch sampler); None = use RunConfig / sampler defaults.
+    diffusion_inference_steps: int | None = None
+    sampler_mode: str | None = None
+    reverse_timestep_indices: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,8 @@ class SamplerProvenance:
     checkpoint_path: str | None = None
     training_dataset_version: str | None = None
     model_architecture: str | None = None
+    sampler_mode: str | None = None
+    reverse_schedule_description: str | None = None
 
     def to_dict(self) -> dict[str, str | int | float | dict[str, Any] | None]:
         d: dict[str, str | int | float | dict[str, Any] | None] = {
@@ -120,6 +126,10 @@ class SamplerProvenance:
             d["training_dataset_version"] = self.training_dataset_version
         if self.model_architecture is not None:
             d["model_architecture"] = self.model_architecture
+        if self.sampler_mode is not None:
+            d["sampler_mode"] = self.sampler_mode
+        if self.reverse_schedule_description is not None:
+            d["reverse_schedule_description"] = self.reverse_schedule_description
         return d
 
 
