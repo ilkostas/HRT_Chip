@@ -9,7 +9,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from hrt_chip.config import RunConfig, SamplerBackend, SyntheticDatasetConfig, TrainingConfig
+from hrt_chip.benchmark_sweep import run_ibm_benchmark_sweep
+from hrt_chip.benchmarks import (
+    AGGREGATE_REPLACE_PROXY,
+    AGGREGATE_SA_PROXY,
+    REPLACE_BASELINE_BY_DESIGN,
+    SA_BASELINE_BY_DESIGN,
+)
+from hrt_chip.config import EvaluatorBackend, RunConfig, SamplerBackend, SyntheticDatasetConfig, TrainingConfig
 from hrt_chip.pipeline import replay_from_manifest, run_pipeline
 
 app = typer.Typer(no_args_is_help=True, help="HRT macro placement pipeline.")
@@ -89,10 +96,23 @@ def run(
         "--model-architecture",
         help="Optional echo of train-time architecture (baseline_gnn, res_gnn, att_gnn).",
     ),
+    evaluator: str = typer.Option(
+        "stub",
+        "--evaluator",
+        "-e",
+        help="stub (default) or official (macro_place + external/MacroPlacement testcases).",
+    ),
+    testcase_root: Optional[Path] = typer.Option(
+        None,
+        "--testcase-root",
+        help="ICCAD04 testcase root (default: env HRT_CHIP_TESTCASE_ROOT or external/MacroPlacement/Testcases/ICCAD04).",
+    ),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
+    if evaluator not in ("stub", "official"):
+        raise typer.BadParameter("--evaluator must be stub or official")
     gw = _parse_guidance_weight_triples(guidance_weight)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     cfg = RunConfig(
@@ -108,6 +128,8 @@ def run(
         checkpoint_path=checkpoint,
         training_dataset_version=training_dataset_version,
         model_architecture=arch,
+        evaluator_backend=cast(EvaluatorBackend, evaluator),
+        testcase_root=testcase_root,
     )
     results = run_pipeline(cfg, run_id=run_id)
     _print_summary(results, cfg)
@@ -237,6 +259,153 @@ def _print_summary(results: dict, cfg: RunConfig) -> None:
     console.print(table)
     out = cfg.output_dir / mid
     console.print(f"Artifacts: [cyan]{out}[/cyan]")
+
+
+@app.command("benchmark-sweep")
+def benchmark_sweep_cmd(
+    seed: int = typer.Option(42, "--seed", "-s"),
+    candidates: int = typer.Option(
+        4,
+        "--candidates",
+        "-k",
+        help="Candidates per guidance weight (same as hrt-chip run).",
+    ),
+    diffusion_steps: int = typer.Option(1000, "--diffusion-steps"),
+    output_dir: Path = typer.Option(
+        Path("runs/sweeps"),
+        "--output-dir",
+        "-o",
+        help="Base directory; sweep writes output_dir/<sweep_id>/...",
+    ),
+    sweep_id: Optional[str] = typer.Option(None, "--sweep-id", help="Optional sweep folder name (default: UUID)."),
+    evaluator: str = typer.Option(
+        "official",
+        "--evaluator",
+        "-e",
+        help="official (default) or stub (CI / no testcase tree).",
+    ),
+    testcase_root: Optional[Path] = typer.Option(None, "--testcase-root"),
+    guidance_preset: Optional[str] = typer.Option(
+        None,
+        "--guidance-preset",
+        help="Built-in sweep: pareto3. Ignored if --guidance-weight is set.",
+    ),
+    guidance_weight: Optional[list[str]] = typer.Option(
+        None,
+        "--guidance-weight",
+        multiple=True,
+        help="Repeatable triple alpha,beta,gamma; overrides --guidance-preset.",
+    ),
+    sampler_backend: str = typer.Option("stub", "--sampler-backend"),
+    checkpoint: Optional[Path] = typer.Option(None, "--checkpoint"),
+    training_dataset_version: Optional[str] = typer.Option(None, "--training-dataset-version"),
+    model_architecture: Optional[str] = typer.Option(None, "--model-architecture"),
+) -> None:
+    """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
+    if evaluator not in ("stub", "official"):
+        raise typer.BadParameter("--evaluator must be stub or official")
+    if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
+        raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
+    gw = _parse_guidance_weight_triples(guidance_weight)
+    arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
+    base = RunConfig(
+        benchmark_id="ibm01",
+        seed=seed,
+        num_candidates=candidates,
+        diffusion_steps=diffusion_steps,
+        output_dir=output_dir,
+        deterministic=True,
+        guidance_preset=None if gw else guidance_preset,
+        guidance_weights_sweep=gw,
+        sampler_backend=cast(SamplerBackend, sampler_backend),
+        checkpoint_path=checkpoint,
+        training_dataset_version=training_dataset_version,
+        model_architecture=arch,
+        evaluator_backend=cast(EvaluatorBackend, evaluator),
+        testcase_root=testcase_root,
+    )
+    report, meta = run_ibm_benchmark_sweep(base, sweep_output_dir=output_dir, sweep_id=sweep_id)
+    sweep_root = meta["sweep_root"]
+
+    console.print(f"[bold green]Benchmark sweep[/bold green] sweep_id={report.sweep_id}")
+    console.print(f"evaluator={evaluator} artifacts={sweep_root}")
+
+    table = Table(
+        title="IBM ICCAD04 sweep (proxy = official evaluator when available)",
+    )
+    table.add_column("Benchmark", justify="right")
+    table.add_column("Proxy", justify="right")
+    table.add_column("SA", justify="right")
+    table.add_column("RePlAce", justify="right")
+    table.add_column("vs SA", justify="right")
+    table.add_column("vs RePlAce", justify="right")
+    table.add_column("Overlaps", justify="right")
+    table.add_column("Time s", justify="right")
+
+    for row in report.rows:
+        sa_b = SA_BASELINE_BY_DESIGN.get(row.benchmark_id)
+        rep_b = REPLACE_BASELINE_BY_DESIGN.get(row.benchmark_id)
+        ps = row.proxy_score
+        ps_s = "—" if ps is None or row.error else f"{ps:.4f}"
+        sa_s = f"{sa_b:.4f}" if sa_b is not None else "—"
+        rep_s = f"{rep_b:.4f}" if rep_b is not None else "—"
+        if ps is not None and sa_b is not None and sa_b != 0:
+            vsa = f"{(sa_b - ps) / sa_b * 100:+.1f}%"
+        else:
+            vsa = "—"
+        if ps is not None and rep_b is not None and rep_b != 0:
+            vrep = f"{(rep_b - ps) / rep_b * 100:+.1f}%"
+        else:
+            vrep = "—"
+        ov = "—" if row.overlaps is None else str(row.overlaps)
+        if row.error:
+            ps_s = "ERR"
+            vsa = vrep = "—"
+        table.add_row(
+            row.benchmark_id,
+            ps_s,
+            sa_s,
+            rep_s,
+            vsa,
+            vrep,
+            ov,
+            f"{row.runtime_seconds:.2f}",
+        )
+
+    g = report.gates
+    mean_p = g.mean_proxy
+    mp_s = "—" if mean_p is None else f"{mean_p:.4f}"
+    if mean_p is not None:
+        vsa_avg = f"{(AGGREGATE_SA_PROXY - mean_p) / AGGREGATE_SA_PROXY * 100:+.1f}%"
+        vrep_avg = f"{(AGGREGATE_REPLACE_PROXY - mean_p) / AGGREGATE_REPLACE_PROXY * 100:+.1f}%"
+    else:
+        vsa_avg = vrep_avg = "—"
+    table.add_row(
+        "AVG",
+        mp_s,
+        f"{AGGREGATE_SA_PROXY:.4f}",
+        f"{AGGREGATE_REPLACE_PROXY:.4f}",
+        vsa_avg,
+        vrep_avg,
+        "—",
+        f"{report.total_runtime_seconds:.2f}",
+    )
+    console.print(table)
+
+    console.print(
+        f"Gate A (100% legal): {'PASS' if g.gate_a_legal_all else 'FAIL'}  "
+        f"({g.legal_count}/{g.total_count} legal)"
+    )
+    console.print(
+        f"Gate B (avg proxy < SA {AGGREGATE_SA_PROXY}): "
+        f"{'PASS' if g.gate_b_beat_sa_aggregate else 'FAIL'}"
+    )
+    console.print(
+        f"Gate C (avg proxy < RePlAce {AGGREGATE_REPLACE_PROXY}): "
+        f"{'PASS' if g.gate_c_beat_replace_aggregate else 'FAIL'}"
+    )
+    if meta.get("errors"):
+        console.print("[yellow]Some benchmarks raised exceptions; see sweep_report.json[/yellow]")
 
 
 def main() -> None:

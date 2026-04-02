@@ -26,6 +26,9 @@ ModelArchitecture = Literal["baseline_gnn", "res_gnn", "att_gnn"]
 # Phase 4: pipeline sampler backend.
 SamplerBackend = Literal["stub", "pytorch_checkpoint"]
 
+# Phase 5: tier-1 evaluator (stub for dev; official requires macro_place + MacroPlacement testcases).
+EvaluatorBackend = Literal["stub", "official"]
+
 
 def resolved_guidance_sweep(
     *,
@@ -138,6 +141,12 @@ class RunConfig:
     model_architecture: ModelArchitecture | None = None
     """Architecture recorded at train time; optional echo for manifests."""
 
+    evaluator_backend: EvaluatorBackend = "stub"
+    """``stub``: deterministic hash proxy; ``official``: macro_place + TILOS PlacementCost."""
+
+    testcase_root: Path | None = None
+    """Directory containing ``<benchmark_id>/netlist.pb.txt`` (ICCAD04). Defaults via env / benchmarks.default_testcase_root."""
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["output_dir"] = str(self.output_dir)
@@ -147,6 +156,10 @@ class RunConfig:
             d["guidance_weights_sweep"] = None
         if self.checkpoint_path is not None:
             d["checkpoint_path"] = str(self.checkpoint_path)
+        if self.testcase_root is not None:
+            d["testcase_root"] = str(self.testcase_root)
+        else:
+            d["testcase_root"] = None
         return d
 
     @classmethod
@@ -165,4 +178,10 @@ class RunConfig:
         out.setdefault("checkpoint_path", None)
         out.setdefault("training_dataset_version", None)
         out.setdefault("model_architecture", None)
+        out.setdefault("evaluator_backend", "stub")
+        tr = out.get("testcase_root")
+        if tr is not None:
+            out["testcase_root"] = Path(tr)
+        else:
+            out["testcase_root"] = None
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})

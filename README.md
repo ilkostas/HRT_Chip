@@ -125,7 +125,7 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Current Project Status
 
-Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, **Phase 3 guided objectives / Pareto-style batch selection**, and **Phase 4 synthetic data + PyTorch/PyG DDPM training** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** (default) or a **trained PyTorch checkpoint** (`--sampler-backend pytorch_checkpoint --checkpoint …`) that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the official evaluator proxy** only. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`, optional `checkpoint_path` / `training_dataset_version`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
+Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, **Phase 3 guided objectives / Pareto-style batch selection**, **Phase 4 synthetic data + PyTorch/PyG DDPM training**, and **Phase 5 benchmark harness + milestone gates** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** (default) or a **trained PyTorch checkpoint** (`--sampler-backend pytorch_checkpoint --checkpoint …`) that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the physical or unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the evaluator proxy** (stub or official). **Phase 5** adds **`hrt-chip benchmark-sweep`** over all 17 IBM designs (`ibm01`–`ibm04`, `ibm06`–`ibm18`), aggregate proxy vs **SA (2.1251)** and **RePlAce (1.4578)** baselines, and **Gate A/B/C** reporting; sweep artifacts include `sweep_report.json`. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`, optional `checkpoint_path` / `training_dataset_version`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the evaluator.
 
 ### What Exists
 
@@ -136,13 +136,13 @@ Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inferenc
 - Diffusion sampler contract + stub ([`src/hrt_chip/diffusion.py`](src/hrt_chip/diffusion.py)), batched candidate generation, and guardrail tests ([`tests/test_diffusion_guardrails.py`](tests/test_diffusion_guardrails.py)).
 - Phase 3 guidance sweep, surrogate objectives, scoring table, strict proxy selection ([`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py), [`tests/test_phase3_guidance.py`](tests/test_phase3_guidance.py)).
 - Adapter contracts for evaluator and mixed-size backend ([`docs/integration-notes.md`](docs/integration-notes.md)).
+- Phase 5 IBM sweep + gates: [`src/hrt_chip/benchmarks.py`](src/hrt_chip/benchmarks.py), [`src/hrt_chip/benchmark_sweep.py`](src/hrt_chip/benchmark_sweep.py), [`src/hrt_chip/adapters/evaluator/official.py`](src/hrt_chip/adapters/evaluator/official.py); tests in [`tests/test_phase5_benchmarks.py`](tests/test_phase5_benchmarks.py).
 
 ### What Is Still Stubbed / Planned
 
 - Further scaling of synthetic data and model quality toward competition benchmarks (beyond Phase 4 scaffolding).
 - Differentiable DDPM guidance on ε-prediction / x̂₀ (Phase 4+; Phase 3 provides sweep + surrogate scoring + selection policy).
-- Official benchmark harness over all 17 IBM designs (Phase 5).
-- Real evaluator and DREAMPlace/hMETIS wiring behind adapters ([`docs/integration-notes.md`](docs/integration-notes.md)).
+- DREAMPlace/hMETIS wiring behind mixed-size adapter ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
 ## Environment and How to Run
 
@@ -157,6 +157,8 @@ Run the end-to-end stub pipeline (example: benchmark `ibm01`, 4 candidates, fixe
 ```bash
 uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 4 --output-dir runs
 ```
+
+**Evaluator backend:** default is **`--evaluator stub`** (deterministic hash proxy). For the **official** tier-1 proxy (TILOS `PlacementCost` via `macro_place`), install the [Partcl macro-place challenge](https://github.com/partcleda/partcl-macro-place-challenge) package (`pip install -e .` from a clone), initialize **`external/MacroPlacement`**, then run with `--evaluator official` and optionally `--testcase-root path/to/ICCAD04`.
 
 Optional: `--diffusion-steps` (default `1000`) is recorded in the manifest and sampler provenance for forward compatibility with the real DDPM schedule.
 
@@ -186,6 +188,18 @@ uv run hrt-chip train --dataset-dir data/synthetic/v1 --epochs 10 --model-archit
 # Run pipeline using a trained checkpoint
 uv run hrt-chip run --benchmark ibm01 --sampler-backend pytorch_checkpoint --checkpoint training_runs/<id>/checkpoint.pt
 ```
+
+**Phase 5 — full IBM suite (17 benchmarks) and milestone gates:**
+
+```bash
+# Full sweep; default --evaluator official (requires macro_place + MacroPlacement testcases)
+uv run hrt-chip benchmark-sweep --output-dir runs/sweeps --seed 42 --candidates 2
+
+# Fast local / CI without official testcase tree
+uv run hrt-chip benchmark-sweep --evaluator stub --output-dir runs/sweeps_stub
+```
+
+Writes `runs/sweeps/<sweep_id>/sweep_report.json` and per-benchmark run dirs. Prints **Gate A** (100% legal), **Gate B** (mean proxy lower than aggregate SA **2.1251**), **Gate C** (mean proxy lower than aggregate RePlAce **1.4578**).
 
 Equivalent:
 
@@ -234,9 +248,9 @@ This project treats reproducibility as mandatory:
 1. ~~Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.~~
 2. ~~Harden legality checker + greedy legalizer with explicit zero-overlap assertions (Phase 1).~~
 3. ~~Diffusion inference skeleton: sampler contract, batched stub, provenance, guardrail tests (Phase 2).~~
-4. ~~Guided objectives + strict proxy selection policy (Phase 3)~~; official evaluator adapter when available.
+4. ~~Guided objectives + strict proxy selection policy (Phase 3).~~
 5. ~~Synthetic data generation, PyTorch/PyG DDPM training, and checkpoint-based sampler inference (Phase 4).~~
-6. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
+6. ~~Experiment harness for 17 IBM benchmark sweeps, gate reporting, and `sweep_report.json` (Phase 5).~~
 7. Add NG45-oriented handoff format/export path for downstream validation.
 
 ## References

@@ -138,6 +138,8 @@ Risks:
 
 - Runtime budget pressure from high `K` candidate counts.
 
+**Implementation status (this repo):** Done. IBM list + gates: [`src/hrt_chip/benchmarks.py`](../src/hrt_chip/benchmarks.py); sweep orchestration: [`src/hrt_chip/benchmark_sweep.py`](../src/hrt_chip/benchmark_sweep.py); CLI `hrt-chip benchmark-sweep` in [`src/hrt_chip/cli.py`](../src/hrt_chip/cli.py); official adapter: [`src/hrt_chip/adapters/evaluator/official.py`](../src/hrt_chip/adapters/evaluator/official.py); pipeline wiring + testcase loading: [`src/hrt_chip/pipeline.py`](../src/hrt_chip/pipeline.py), [`src/hrt_chip/official_benchmark.py`](../src/hrt_chip/official_benchmark.py); tests: [`tests/test_phase5_benchmarks.py`](../tests/test_phase5_benchmarks.py).
+
 ## Phase 6 - Reproducibility and Regression Controls
 
 Purpose: ensure repeatable results and stable progress over time.

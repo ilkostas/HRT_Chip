@@ -43,6 +43,8 @@ def generate_candidates(
     seed: int,
     num_candidates: int,
     macro_specs: Sequence[tuple[str, float, float]] | None = None,
+    canvas_w: float = 1.0,
+    canvas_h: float = 1.0,
     diffusion_steps: int = 1000,
     sampler: DiffusionSampler | None = None,
     guidance_sweep: Sequence[tuple[float, float, float]] | None = None,
@@ -53,8 +55,8 @@ def generate_candidates(
     ``guidance_sweep`` is a sequence of (α_hpwl, β_congestion, γ_legality) triples; each triple
     gets one ``sample_batch`` call. Total candidates = len(guidance_sweep) * num_candidates.
 
-    Normalized centers in [-1, 1] are converted to unit-canvas lower-left
-    coordinates for ``MacroRect`` (Phase 1 legalizer / geometry).
+    Normalized centers in [-1, 1] are converted to lower-left physical coordinates on
+    ``[0, canvas_w] × [0, canvas_h]`` (default unit canvas for stub benchmarks).
     """
     smp = sampler or DeterministicDDPMStubSampler()
     if macro_specs is not None:
@@ -94,7 +96,9 @@ def generate_candidates(
             normalized_centers: list[dict[str, float | str]] = []
             for center, spec in zip(cs.centers, specs, strict=True):
                 normalized_centers.append(center.to_dict())
-                x, y = normalized_center_to_lower_left(center.cx, center.cy, spec.w, spec.h)
+                x, y = normalized_center_to_lower_left(
+                    center.cx, center.cy, spec.w, spec.h, canvas_w=canvas_w, canvas_h=canvas_h
+                )
                 macros.append(MacroRect(name=spec.name, x=x, y=y, w=spec.w, h=spec.h))
             # Multi-sweep: prefix for global uniqueness; single-sweep: legacy ids (Phase 2 compat).
             cand_id = cs.candidate_id if len(sweep) == 1 else f"s{si:02d}_{cs.candidate_id}"

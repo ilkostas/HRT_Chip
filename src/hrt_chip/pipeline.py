@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from hrt_chip.adapters.evaluator.base import EvaluationResult, EvaluatorAdapter
 from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
+from hrt_chip.benchmarks import default_testcase_root
 from hrt_chip.config import RunConfig, resolved_guidance_sweep
 from hrt_chip.diffusion import DiffusionSampler
 from hrt_chip.geometry import placement_is_legal
@@ -16,6 +18,24 @@ from hrt_chip.io.artifacts import PipelineArtifacts, build_manifest, write_json
 from hrt_chip.stages.evaluate import evaluate_candidate
 from hrt_chip.stages.generate import generate_candidates
 from hrt_chip.stages.legalize import legalize_candidate
+
+
+def _resolve_evaluator(
+    config: RunConfig,
+    *,
+    prime: tuple[str, Any, Any] | None = None,
+) -> EvaluatorAdapter:
+    if config.evaluator_backend == "official":
+        from hrt_chip.adapters.evaluator.official import OfficialMacroPlacementEvaluator
+        from hrt_chip.benchmarks import default_testcase_root
+
+        root = config.testcase_root or Path(default_testcase_root())
+        ev = OfficialMacroPlacementEvaluator(testcase_root=root)
+        if prime is not None:
+            bid, bench, plc = prime
+            ev.prime(bid, bench, plc)
+        return ev
+    return LocalStubEvaluator()
 
 
 def _resolve_sampler(config: RunConfig, sampler: DiffusionSampler | None) -> DiffusionSampler | None:
@@ -45,7 +65,21 @@ def run_pipeline(
 
     Returns structured dict suitable for JSON serialization and CLI display.
     """
-    ev = evaluator or LocalStubEvaluator()
+    testcase_path = config.testcase_root or Path(default_testcase_root())
+    bench_obj: Any | None = None
+    macro_specs_arg: Any = None
+    canvas_w, canvas_h = 1.0, 1.0
+    prime_bundle: tuple[str, Any, Any] | None = None
+
+    if config.evaluator_backend == "official":
+        from hrt_chip.official_benchmark import load_full_benchmark
+
+        bench_obj, plc_obj, macro_specs_arg, canvas_w, canvas_h = load_full_benchmark(
+            config.benchmark_id, Path(testcase_path)
+        )
+        prime_bundle = (config.benchmark_id, bench_obj, plc_obj)
+
+    ev = evaluator or _resolve_evaluator(config, prime=prime_bundle)
     ms = mixed_size or LocalStubMixedSizeBackend()
 
     manifest = build_manifest(config, run_id=run_id)
@@ -68,6 +102,9 @@ def run_pipeline(
         benchmark_id=config.benchmark_id,
         seed=config.seed,
         num_candidates=config.num_candidates,
+        macro_specs=macro_specs_arg,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
         diffusion_steps=config.diffusion_steps,
         guidance_sweep=sweep,
         sampler=smp,
@@ -79,9 +116,13 @@ def run_pipeline(
     best_candidate_id: str | None = None
 
     for cand in raw:
-        legalize_candidate(cand)
+        legalize_candidate(cand, canvas_w=canvas_w, canvas_h=canvas_h)
+        if bench_obj is not None:
+            from hrt_chip.official_benchmark import restore_fixed_macro_positions
+
+            restore_fixed_macro_positions(cand, bench_obj)
         legal_flag = cand.metadata.get("legal") is True
-        geom_ok = placement_is_legal(cand.macros)
+        geom_ok = placement_is_legal(cand.macros, canvas_w=canvas_w, canvas_h=canvas_h)
         assert legal_flag == geom_ok, (
             "legality metadata must match geometry check (legal flag vs placement_is_legal)"
         )
@@ -153,6 +194,10 @@ def run_pipeline(
     results: dict[str, Any] = {
         "manifest": manifest.to_dict(),
         "benchmark_id": config.benchmark_id,
+        "evaluator_backend": config.evaluator_backend,
+        "testcase_root": str(testcase_path),
+        "canvas_width": canvas_w,
+        "canvas_height": canvas_h,
         "guidance_sweep_resolved": [list(t) for t in sweep],
         "sampler_provenance": sampler_provenance,
         "sampler_backend": config.sampler_backend,
