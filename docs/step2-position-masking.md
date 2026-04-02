@@ -74,9 +74,11 @@ Therefore you **cannot** maintain MaskPlace’s **per-step mask against M₁:ₜ
 
 ---
 
-## 3. Diffusion: legality potential + backwards universal guidance
+## 3. Diffusion: fixed-weight surrogates + greedy legalization
 
-For **simultaneous diffusion**, legality is encouraged with a **continuous legality potential** whose **gradient** steers sampling. The intended mechanism is **backwards universal guidance**: at each denoising step, use the model’s prediction of the **fully denoised** coordinates **x̂₀**, compute gradients of scalar potentials w.r.t. those coordinates, and inject them into the sampling update. You **do not** train a **separate critic network** for this—the guidance comes from **differentiable potentials** on **x̂₀**.
+For **simultaneous diffusion**, this repository does **not** implement per-step gradient steering from legality potentials. Instead, it generates candidate coordinates (which may contain soft overlap risk) and then enforces the strict zero-overlap constraint with the **greedy legalization** pass in Step 2. The `(α, β, γ)` guidance weights are fixed per candidate and are used for surrogate bookkeeping/diagnostics rather than dynamically adapting legality during sampling.
+
+Note: Some diffusion-placement papers discuss dynamic, gradient-based “legality guidance” with interleaved Lagrange-style updates; this repository does not implement that. Any “dynamic weights” discussion below is conceptual background only.
 
 **Potentials (typical stack):**
 
@@ -85,9 +87,9 @@ For **simultaneous diffusion**, legality is encouraged with a **continuous legal
 
 **Dynamic weights:** Gradients are combined using **Lagrangian multipliers** adjusted via **interleaved gradient-style** updates so the trade-off between overlap and HPWL can adapt across circuits—avoid fixing a single weight for all benchmarks.
 
-### Coordinate parameterization (unambiguous “gradient on coordinates”)
+### Coordinate parameterization (generated centers for surrogates + legalizer)
 
-Align with **Step 1**: the diffusion model operates on an array of **2D centers** for movable objects, **normalized to chip boundaries in [−1, 1]** end-to-end. “Guidance applies to coordinates” means: compute **∂ϕ / ∂x̂₀** on those **continuous [−1, 1]** tensors and inject the resulting direction into the reverse diffusion step (see Step 1 for full DDPM / noise-prediction context).
+Align with **Step 1**: the diffusion model operates on an array of **2D centers** for movable objects, **normalized to chip boundaries in [−1, 1]** end-to-end. These generated coordinates are converted to physical macro rectangles for surrogate computations and for the greedy legalization pass (Step 2).
 
 ### Paper vs competition target legality
 
@@ -128,7 +130,7 @@ Because the competition disqualifies any residual overlap, Step 2 legalizer robu
 
 ## See also
 
-- [`step1-diffusion-model.md`](./step1-diffusion-model.md) — **[−1, 1]** normalized centers, DDPM, **backwards universal guidance** stack, synthetic training.  
+- [`step1-diffusion-model.md`](./step1-diffusion-model.md) — **[−1, 1]** normalized centers, DDPM, fixed guidance weights `(α, β, γ)` sweep, synthetic training.  
 - [`step3-multi-objective-proxy-to-ppa.md`](./step3-multi-objective-proxy-to-ppa.md) — HPWL vs legality weights, Pareto search.  
 - [`proposed-solution-overview.md`](./proposed-solution-overview.md) — updated three-pillar overview (diffusion + legality/legalize + inference MOO).  
 - [`macro-placement-competition.md`](./macro-placement-competition.md) — zero overlap, runtime, metrics.

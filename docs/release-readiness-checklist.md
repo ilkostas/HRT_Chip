@@ -4,8 +4,7 @@ This checklist is used to decide whether your current configuration is “submis
 It is intentionally strict to avoid false progress from non-comparable runs.
 
 ## A) Competition profile compliance
-
-All of the following must be true:
+**Required:** All of the following must be true:
 
 - You ran with `--evaluator official` (not `stub`) for any performance claim you intend to use.
 - You used `--selection-policy proxy_first` for claimed Tier-1 proxy results.
@@ -19,8 +18,7 @@ All of the following must be true:
   - same `--diffusion-inference-steps`
 
 ## B) Evidence completeness (artifacts exist and are consistent)
-
-For the winner run (the one you will claim), the directory must contain:
+**Required:** For the winner run (the one you will claim), the directory must contain:
 
 - `manifest.json`
 - `results.json`
@@ -34,8 +32,7 @@ For sweeps:
 - trends line appended to your configured JSONL log (if you use `benchmark-sweep` with trends logging)
 
 ## C) Legality requirement (hard gate)
-
-Your final elected winner must satisfy:
+**Required:** Your final elected winner must satisfy:
 
 - `Gate A` (17/17 legal on FULL17) is satisfied for the config you claim.
 - No exceptions occurred during official evaluation.
@@ -49,6 +46,7 @@ If any benchmark is illegal:
 
 On FULL17 with your chosen competition profile:
 
+- **Tier-1 proxy gate:** this checks “beating SA/RePlAce” in terms of proxy cost only (TILOS MacroPlacement `proxy_cost`).
 - Mean proxy beats the competition baselines:
   - aggregate SA proxy: `2.1251`
   - aggregate RePlAce proxy: `1.4578`
@@ -73,6 +71,7 @@ Your final run must meet runtime assumptions:
 
 Failing any of these is an immediate stop:
 
+- See [`docs/failure-modes.md`](docs/failure-modes.md) for the canonical “Do Not Violate” list.
 - Official evaluator wasn’t used for claimed numbers
 - Winner fails Gate A (not 17/17 legal)
 - Replay verification fails

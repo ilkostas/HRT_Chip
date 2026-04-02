@@ -3,10 +3,13 @@
 This matrix defines the **compute-constrained** experiments you run during Days 4-5.
 The intent is to maximize win probability within 7 days by only exploring settings that can plausibly change the official proxy ranking.
 
+Before running any proxy experiments, review: [`docs/failure-modes.md`](docs/failure-modes.md) (proxy anti-patterns and rule violations).
+
 ## Inputs you must provide
 
-- A trained checkpoint file: `checkpoint.pt`
-- Official evaluator assets (or temporarily run with `--evaluator stub` but do not use stub results as evidence).
+- **Required:** A trained checkpoint file: `checkpoint.pt`
+- **Required:** Official evaluator assets
+  - You may run with `--evaluator stub` temporarily for wiring only, but you must not use stub results as evidence.
 
 ## Benchmark subsets (use the same subset every time)
 
@@ -14,13 +17,14 @@ Pick these once on Day 1 and do not change them during Days 4-5:
 
 - `SMOKE_SUBSET` (2 benchmarks): `ibm01`, `ibm06` (example)
 - `DEV_SUBSET` (4-6 benchmarks): `ibm01`, `ibm03`, `ibm06`, `ibm12`, `ibm17` (example)
-- `FULL17` (promotion day): all `ibm01–ibm18` in `src/hrt_chip/benchmarks.py`
+- `FULL17` (promotion day): the canonical IBM set used by this repo:
+  - `ibm01–ibm04, ibm06–ibm18` (17 total; `ibm05` is excluded in `src/hrt_chip/benchmarks.py`)
 
 If you have a reason to prefer a different dev subset, change it on Day 1 and document the change in `docs/submission-runbook.md`.
 
 ## Fixed settings (do not vary)
 
-These must stay constant while you test sampler/guidance variations:
+**Required:** These must stay constant while you test sampler/guidance variations:
 
 - `--evaluator official`
 - `--sampler-backend pytorch_checkpoint`
@@ -34,7 +38,7 @@ These must stay constant while you test sampler/guidance variations:
 
 ## Variables to explore (keep the matrix compact)
 
-For a small, high-signal search, vary only:
+**Recommended:** For a small, high-signal search, vary only:
 
 1. Sampler mode + effective reverse step count
 2. Guidance weights (stick to `pareto3` for week-wide comparability; only override if you have evidence)
@@ -57,7 +61,7 @@ If legality ever drops below 100% on smoke, reduce `--diffusion-inference-steps`
 
 ## Promotion criteria (how you decide what to run on Day 6)
 
-Promotion happens only when all of the following are true:
+**Required for advancement:** Promotion happens only when all of the following are true:
 
 - Smoke subset:
   - `Gate A` is satisfied on the subset you treat as “smoke” (all legal)
@@ -71,7 +75,7 @@ If two experiments are within measurement noise, promote both as top-1/top-2 fin
 
 ## Evidence you must save per experiment
 
-For each run or sweep, preserve:
+**Required evidence discipline:** For each run or sweep, preserve:
 
 - sweep output JSON (`sweep_report.json`) when using `benchmark-sweep`
 - run `manifest.json`

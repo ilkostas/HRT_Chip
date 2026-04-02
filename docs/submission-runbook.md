@@ -28,8 +28,9 @@ For `--evaluator official`, you must have:
 
 1. Challenge evaluator package installed so `macro_place` imports.
 2. ICCAD04 testcases available under:
-   - `external/MacroPlacement/Testcases/ICCAD04/`, or
-   - `HRT_CHIP_TESTCASE_ROOT`, or
+   - **Recommended:** set `HRT_CHIP_TESTCASE_ROOT` to the **ICCAD04 root** inside your cloned `macro-place-challenge-2026-main` checkout (the folder that contains `ibm01/`, `ibm02/`, ... and `netlist.pb.txt`).
+   - `external/MacroPlacement/Testcases/ICCAD04/` (only if the TILOS/MacroPlacement assets are present under this repo).
+   - `HRT_CHIP_TESTCASE_ROOT` (alternative), or
    - via `--testcase-root`.
 
 If prerequisites are missing, you may run with `--evaluator stub` for debugging, but you must treat those results as *non-competitive evidence*.
@@ -41,7 +42,12 @@ If you choose `--mixed-size-backend dreamplace` or `dreamplace_real`:
 - Docker must be able to run the container and produce the expected `output.json` contract.
 - Ensure the repo path is mounted correctly into the container.
 
+Before any official Day 1 run, review: [`docs/failure-modes.md`](docs/failure-modes.md).
+
 ## 2) Day 1: Freeze + baseline sanity
+
+**Required:** Run the **smoke** official sweep and confirm `Gate A` is satisfied (i.e., the sweep reports all candidates legal on the smoke benchmarks).
+**Stop if:** the smoke sweep does not have `gate_a_legal_all == true` or artifacts are missing.
 
 1. Decide your competition run profile and freeze it (see `docs/competition-profile.md`).
 2. Define the benchmark subsets and freeze them (see `docs/experiment-matrix.md`).
@@ -52,6 +58,9 @@ If you choose `--mixed-size-backend dreamplace` or `dreamplace_real`:
 4. Pick the incumbent config (best by legality first, then mean proxy, then runtime).
 
 ## 3) Day 2: Incumbent evidence and replay verification
+
+**Required:** Produce `incumbent.json` from official baseline sweeps and ensure replay verification PASS for at least one audited manifest before continuing.
+**Stop if:** replay verification fails (then fix reproducibility before Days 4-5).
 
 For the incumbent candidate, do:
 
@@ -95,7 +104,20 @@ uv run hrt-chip replay <path/to/manifest.json> --verify
 
 If verification fails, do not proceed with Days 4-5. Fix reproducibility first.
 
+## 3) Day 3: Mixed-size reliability hardening
+
+**Required (only if using `dreamplace` / `dreamplace_real` for any run):** Confirm the mixed-size backend can execute successfully on legal candidates and produces the expected Docker output contract (schema + metrics).
+**Stop if:** you see repeated container failures, missing/invalid `output.json` contract fields, or missing `metadata.mixed_size` for legal candidates.
+
+**Evidence to produce / validate:**
+- For at least one Day 2 or Day 4-5 run (the mixed-size backend you will actually use):
+  - Each legal candidate has `metadata.mixed_size.ok == true`.
+  - `results.json` / ranking data includes a `mixed_size_profile` (so tie-break behavior is well-defined).
+
 ## 4) Days 4-5: Performance search matrix
+
+**Required:** Keep legality perfect on the smoke/development progression gates (do not promote candidates that break Gate A).
+**Recommended:** Promote only experiments that improve mean proxy vs incumbent while staying within runtime sanity.
 
 Using the exact fixed settings from `docs/experiment-matrix.md`, run the compact matrix:
 
@@ -124,7 +146,15 @@ Stop exploring configurations that:
 - introduce legality regressions,
 - exceed runtime budget.
 
+**Evidence to produce:**
+- `runs/day4_5/<incumbent_id>__day4_5_finalists.json`
+- For each E1–E4 experiment sweep, `sweep_report.json` under the corresponding `runs/day4_5/<sweep_id>/` directory.
+
 ## 5) Day 6: Full-17 promotion and finalist lock
+
+**Required:** Only lock finalists that satisfy `Gate A` across FULL17 (17 designs) and have replay verification PASS for the winner (and backup).
+**Required (scope note):** This repository locks winners using Tier-1 official proxy cost only; OpenROAD WNS/TNS/Area validation is performed by the competition infrastructure/judges.
+**Recommended:** If you can run an external Tier-2 rehearsal via the challenge repository on public NG45, do it after locking by proxy (do not change your winner based on local OpenROAD).
 
 1. Run FULL17 promotion sweeps using the helper script (locks the winner/backup
    and performs replay verification on one benchmark):
@@ -145,6 +175,10 @@ python tools/run_full17_promotion_day6.py \
 3. Replay verification output is written under the Day 6 lock JSON:
    - `...__day6_full17_finalist_lock.json`
 
+**Evidence to produce:**
+- `runs/day6/<incumbent_id>__day6_full17_finalist_lock.json`
+- `replay_verification.json` present for the winner (and backup if applicable)
+
 If you prefer manual execution, the equivalent steps are:
 
 1. Run `benchmark-sweep` on FULL17 for the top 2 finalists from Days 4-5.
@@ -156,6 +190,8 @@ If you prefer manual execution, the equivalent steps are:
    - replay confidence (at least one replay verify)
 
 ## 6) Day 7: Freeze and evidence pack
+
+**Required:** The evidence pack creation must succeed and pass the final readiness checks (winner Gate A + replay PASS).
 
 Run the Day 7 finalizer (recommended; it enforces Gate A + replay PASS and assembles a compact evidence pack):
 
@@ -181,6 +217,9 @@ What it assembles:
 3. Replay verification artifact:
    - `replay_verification.json` (from `replay --verify`)
 4. The exact competition command(s) you ran, copied from this runbook.
+
+Additionally, it writes:
+- `runs/day7/<incumbent_id>__evidence_pack/evidence_manifest.json`
 
 ### Evidence acceptance checklist (final)
 

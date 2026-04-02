@@ -16,7 +16,7 @@ The **“50%+ HPWL vs RL”** comparison comes from *Chip Placement with Diffusi
 
 ### Training vs inference
 
-The diffusion model is trained **offline on synthetic layouts only**, with the **standard noise-prediction loss (MSE)**—**not** on real circuits or proxy costs. **Proxy objectives (e.g. HPWL, legality)** enter **at inference time** via **backwards universal guidance**: gradients of cost terms nudge sampled coordinates during denoising. There is **no RL or distillation** on top of the core diffusion training.
+The diffusion model is trained **offline on synthetic layouts only**, with the **standard noise-prediction loss (MSE)**—**not** on real circuits or proxy costs. **Proxy objectives (e.g. HPWL, legality)** enter **at inference time** via fixed exploration weights `(α, β, γ)` attached to each generated candidate (e.g. `pareto3`) and used for surrogate diagnostics; strict legality is enforced by greedy legalization + the official evaluator. There is **no RL or distillation** on top of the core diffusion training.
 
 Runtime figures in the literature (e.g. **~21.2 minutes average** on ISPD circuits for the neural placement pass) measure **forward passes and placement execution**, **not** a full OpenROAD place-and-route evaluation.
 
@@ -35,7 +35,7 @@ Therefore, a **diffusion-based pipeline must include a fast, greedy post-process
 
 Submissions are scored first on **Proxy Cost** (wirelength, density, congestion); top results are validated with **OpenROAD**: **WNS**, **TNS**, and **Area**.
 
-For this diffusion-first stack, there is **no** separate critic/policy for objectives; use **inference-time weights** (e.g. treating HPWL and legality weights as **Lagrange multipliers** updated during denoising). This is **hand-tuned or searched**, analogous in spirit to **classifier-free guidance**—not a trained MORL head on the diffusion net.
+For this diffusion-first stack, there is **no** separate critic/policy for objectives; use **inference-time weights** `(α, β, γ)` as fixed per-candidate exploration vectors. Hard legality is enforced by legalization + the official evaluator, and final ranking uses the official Proxy Cost—this is **hand-tuned or searched**, not a trained MORL head on the diffusion net.
 
 **Pareto exploration:** sweep a **discrete set** of preference weights at inference (literature often illustrates on the order of **~10–15** distinct vectors). In this project, candidate selection is explicit: choose the single layout with the **lowest official Proxy Cost** after legalization.
 

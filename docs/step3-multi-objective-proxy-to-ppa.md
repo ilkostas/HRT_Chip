@@ -28,7 +28,7 @@ Use **Half-Perimeter Wirelength (HPWL)**: for each net, bounding box over connec
 
 The competition’s official **“Density”** proxy is evaluated **only** on the **final discrete layout** after your **greedy legalizer** snaps macros to **exact** zero overlap. So: overlap potential is an **internal surrogate** to reach **high** legality during sampling (e.g. **~99.7%** legality before snap); **legalization** produces the layout on which **Density** (and the full proxy) is computed.
 
-**Lagrange-style** balancing between HPWL and **ϕ_legality** during denoising is common in the diffusion placement literature; treat legality as a **constraint** tightened via **interleaved** gradient steps (see §2).
+:**Fixed weights in this repo:** `(α, β, γ)` are fixed per weight-vector and used for surrogate-objective bookkeeping; strict legality (0 overlaps) is enforced by the greedy legalizer + the official evaluator, not by dynamically tightened in-loop Lagrange multipliers.
 
 ---
 
@@ -38,17 +38,17 @@ The competition’s official **“Density”** proxy is evaluated **only** on th
 
 **No MORL head:** You do **not** train a multi-objective RL critic or a family of policies. **(α, β, γ)** are **inference-only** knobs.
 
-**Where gradients attach:** Guidance does **not** modify the noise target directly. At reverse step **t**, derive the predicted **fully denoised** macro coordinates **x̂₀** from the current noisy state (standard DDPM algebra from the ε-prediction). Compute:
+**Where guidance weights are used (current repo):** `(α, β, γ)` are fixed per weight-vector and attached to each generated candidate as metadata/provenance; this repository does **not** implement gradient-based legality steering inside the diffusion sampler.
 
-**∇ϕ_hpwl(x̂₀)**, **∇ϕ_congestion(x̂₀)**, **∇ϕ_legality(x̂₀)**,
+Conceptual gradient terms (not computed in this repo):
 
-then form a combined guidance force **g(x_t)** (or equivalent injection into the coordinate update) from **α**, **β**, **γ** and add it to the diffusion step so the **continuous coordinates** are steered. Keep **sign conventions** (minimize vs. maximize) and scaling **consistent** with your implementation.
+The in-loop gradient steering described above is **not implemented** in this repository; instead, guidance weights are fixed per weight-vector and used after generation (and legalization) for surrogate diagnostics / optional pre-evaluation rejection.
 
-**Guided update (conceptual):**
+**In-loop guidance update:** Not implemented in this repository.
 
-**Δx_guided = Δx_model + α ∇ϕ_hpwl + β ∇ϕ_congestion + γ ∇ϕ_legality**
+**Conceptual Δx_guided equation (reference only):** guidance weights are fixed per weight-vector in this repository; no in-loop gradient-steering term is applied.
 
-**Dynamic legality:** Optimize **γ** (or a Lagrange multiplier schedule) during sampling so overlap is driven down while HPWL/congestion trade off—**interleaved gradient descent** alongside the reverse process.
+**Dynamic legality:** Not implemented in this repository; `(α, β, γ)` are fixed per weight-vector and legality is enforced by greedy legalization + the official evaluator.
 
 **RL / MOPPO:** Not used. Changing weights does **not** require retraining the DDPM; only the inference-time **(α, β, γ)** sweep changes.
 
@@ -60,7 +60,7 @@ Because **(α, β, γ)** apply only at **generation** time, one **fixed** checkp
 
 ### Definition of “Pareto” for this stack
 
-The frontier is explored by sweeping **discrete weight vectors** over **ϕ_hpwl** and **ϕ_congestion** surrogates. **ϕ_legality** is treated as a **strict constraint**, enforced via the **Lagrangian / dynamic weight** mechanism above so layouts are **fully legal** or **~99.7%** legal before snapping. The **Pareto** interpretation: **non-dominated trade-offs** between **wirelength** and **routing congestion** among **legal** (or pre-legalize) candidates—not a sweep that mirrors the official **1.0 / 0.5 / 0.5** proxy coefficients.
+The frontier is explored by sweeping **discrete weight vectors** over **ϕ_hpwl** and **ϕ_congestion** surrogates. Hard legality (0 overlaps under the evaluator) is enforced by the greedy legalizer + the `official` evaluator; in this repository, **ϕ_legality** is used as a **surrogate** for diagnostics / optional pre-evaluation rejection, not as a dynamically tightened in-loop constraint. The **Pareto** interpretation: **non-dominated trade-offs** between **wirelength** and **routing congestion** among **legal** (post-legalization) candidates—not a sweep that mirrors the official **1.0 / 0.5 / 0.5** proxy coefficients.
 
 ### Tuning **(α, β, γ)** vs. the official proxy
 

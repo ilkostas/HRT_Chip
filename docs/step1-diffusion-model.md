@@ -82,25 +82,25 @@ The model learns to **reconstruct** these layouts from noise. **Full competition
 
 ---
 
-## 4. Guided sampling (inference only; simplified stack + dynamic weights)
+## 4. Guidance in this repository (inference only; fixed per-candidate weights)
 
-A vanilla diffusion model produces **plausible** layouts from its training distribution. To target placement quality, apply **guided sampling** (backwards / universal guidance style) **during reverse diffusion**.
+A vanilla diffusion model produces **plausible** layouts from its training distribution. In this repository, the `(α, β, γ)` guidance weights are **fixed exploration weights** per weight-vector / candidate, not dynamically tuned Lagrange multipliers during reverse diffusion.
 
-### What to optimize per step (and what not to)
+### What guidance does (and does not) do here
 
-- **During each reverse step**, do **not** compute the **full** competition Proxy Cost. In particular, a **differentiable routing congestion** proxy (e.g. **RUDY**-style) at **every** of **1000** steps is **prohibitive**.
-- Instead, guide with a **simplified stack**: **HPWL** + **legality** (and **density** as part of your legality / overlap story—treat **legality** as the constraint you enforce via potentials).
+- `(α, β, γ)` are fixed per weight-vector / candidate in this repo; they are not dynamically updated during sampling.
+- Candidate generation runs the diffusion sampler once per weight-vector; the deterministic diffusion stub uses these weights for deterministic diversity shifts, while the `pytorch_checkpoint` sampler records guidance for provenance but does not apply gradient-based steering inside the reverse diffusion loop.
 
-**Fully differentiable proxies (implement explicitly):**
+In this repository, these potentials are computed after sampling as **cheap surrogates** for diagnostics / optional pre-evaluation rejection; they are not injected as gradients during reverse diffusion.
 
-- **HPWL:** use a **differentiable** surrogate such as **LogSumExp** (as in analytical placers like DREAMPlace), not discrete half-perimeter reads inside the autograd loop if that breaks differentiability.
-- **Legality:** a **continuous potential**, e.g. **squared overlapping area** or **squared overlap distance** over **pairs** of macro bounding boxes (from normalized coords + width/height).
+- **HPWL:** computed as a surrogate objective for candidate diagnostics (not per-step gradient guidance in this repo).
+- **Legality:** computed as an overlap-style surrogate objective for candidate diagnostics (not per-step gradient guidance in this repo).
 
-At each guided step, work from the **predicted clean coordinates** **x̂₀** (or equivalent formulation consistent with DDPM sampling), compute **gradients** of HPWL and legality potentials w.r.t. **x̂₀**, and inject them as the **guidance** term **g(xₜ)**.
+These surrogates are combined into the composite surrogate objective using the fixed `(α, β, γ)` weights stored on each candidate; the reverse diffusion loop does not apply gradient-based updates from these potentials.
 
-### Dynamic Lagrangian multipliers (not constant weights)
+### Dynamic Lagrangian multipliers (research concept; not implemented here)
 
-Do **not** rely on **fixed** guidance weights: the trade-off between wirelength and overlap **varies by circuit**. Use a **dynamic Lagrangian** view: treat **legality** as a constraint **ϕ_legality(x) → 0** and minimize **ϕ_HPWL(x)**; during reverse diffusion, use **interleaved gradient-style updates** so **Lagrange multipliers λ** adapt automatically.
+Some diffusion placement papers adapt Lagrange multipliers λ with interleaved gradient-style updates during sampling; this repository does not currently implement that dynamic scheduling.
 
 ### Official metric **after** sampling
 
