@@ -1,4 +1,4 @@
-# Integration Notes (Phase 0–5)
+# Integration Notes (Phase 0–6)
 
 This document describes how the executable pipeline connects to external competition assets and backends. Phase 0–3 run **fully locally** using stub adapters for evaluator, mixed-size, and diffusion sampling; no submodule checkout is required to execute `hrt-chip run` with **`--evaluator stub`**. **Phase 5** adds an optional **official** evaluator path and IBM sweep (`hrt-chip benchmark-sweep`).
 
@@ -49,3 +49,11 @@ For runs that call cloud-hosted evaluators or data:
 2. Load secrets and endpoints: `source env.sh`.
 
 These scripts are local to your machine and are not committed to this repository.
+
+## Phase 6 — reproducibility and regression controls
+
+- **Determinism:** [`src/hrt_chip/deterministic_runtime.py`](../src/hrt_chip/deterministic_runtime.py) seeds `random` / NumPy / PyTorch when `RunConfig.deterministic` is true; optional **`deterministic_verification`** tightens cuDNN and CUDA behavior (may be slower).
+- **Manifest:** [`src/hrt_chip/io/artifacts.py`](../src/hrt_chip/io/artifacts.py) `RunManifest` includes `deterministic_verification` alongside `deterministic_mode`.
+- **Replay verify:** [`hrt-chip replay`](../src/hrt_chip/cli.py) `--verify` loads baseline `results.json` next to the manifest, re-runs the pipeline, compares fingerprints ([`src/hrt_chip/replay_verify.py`](../src/hrt_chip/replay_verify.py)), writes `replay_verification.json`, exits non-zero on mismatch.
+- **Retention:** After each run, per-candidate JSON under `candidates/` can be pruned via `artifact_retention` (`full` | `compact` | `best_only`) and optional `artifact_retention_top_k` for compact mode; `results.json` always keeps full `ranking` / `scoring_table`.
+- **CI:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs `pytest`, `hrt-chip run` + `replay --verify`, and a stub **`benchmark-sweep`** over a small `--benchmark` subset.

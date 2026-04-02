@@ -24,6 +24,7 @@ class RunManifest:
     created_at_utc: str
     config: dict[str, Any]
     deterministic_mode: bool
+    deterministic_verification: bool = False
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -45,6 +46,7 @@ def build_manifest(config: RunConfig, *, run_id: str | None = None, notes: str =
         created_at_utc=utc_now_iso(),
         config=config.to_dict(),
         deterministic_mode=config.deterministic,
+        deterministic_verification=config.deterministic_verification,
         notes=notes,
     )
 
@@ -115,3 +117,46 @@ class PipelineArtifacts:
     def ensure_dirs(self) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.candidates_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def replay_verification_path(self) -> Path:
+        return self.run_dir / "replay_verification.json"
+
+
+def apply_candidate_retention(
+    artifacts: PipelineArtifacts,
+    results: dict[str, Any],
+    *,
+    mode: str,
+    top_k: int | None = None,
+) -> None:
+    """
+    Prune ``candidates/*.json`` according to retention policy.
+
+    ``results.json`` is unchanged; ranking and scoring_table remain the full logical record.
+    """
+    if mode == "full":
+        return
+
+    ranking = list(results.get("ranking") or [])
+    cand_dir = artifacts.candidates_dir
+    if not cand_dir.is_dir():
+        return
+
+    existing = {p.name for p in cand_dir.glob("*.json")}
+
+    if mode == "best_only":
+        keep_id = results.get("best_candidate_id")
+        keep_names = {f"{keep_id}.json"} if keep_id else set()
+    elif mode == "compact":
+        if top_k is not None and top_k > 0:
+            keep_ids = [r["candidate_id"] for r in ranking[:top_k]]
+            keep_names = {f"{cid}.json" for cid in keep_ids}
+        else:
+            keep_names = set()
+    else:
+        return
+
+    for name in existing:
+        if name not in keep_names:
+            (cand_dir / name).unlink(missing_ok=True)

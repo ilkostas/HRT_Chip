@@ -27,10 +27,12 @@ def run_ibm_benchmark_sweep(
     *,
     sweep_output_dir: Path,
     sweep_id: str | None = None,
-    benchmarks: tuple[str, ...] = IBM_BENCHMARKS,
+    benchmarks: tuple[str, ...] | None = None,
 ) -> tuple[SweepReport, dict[str, Any]]:
     """
     Run ``run_pipeline`` once per benchmark; write per-benchmark artifacts under ``sweep_output_dir``.
+
+    ``benchmarks`` defaults to all 17 IBM ids when ``None``; pass a subset for smoke / CI.
 
     Returns ``(SweepReport, extra_diagnostics)``.
     """
@@ -38,10 +40,12 @@ def run_ibm_benchmark_sweep(
     sweep_root = sweep_output_dir / sid
     sweep_root.mkdir(parents=True, exist_ok=True)
 
+    bench_list = benchmarks if benchmarks is not None else IBM_BENCHMARKS
+
     rows: list[BenchmarkRow] = []
     errors: list[dict[str, Any]] = []
 
-    for bid in benchmarks:
+    for bid in bench_list:
         run_dir = sweep_root / bid
         run_dir.mkdir(parents=True, exist_ok=True)
         cfg = replace(base_config, benchmark_id=bid, output_dir=run_dir)

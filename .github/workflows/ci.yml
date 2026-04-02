@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: CLI end-to-end + replay verify (stub)
+        run: |
+          set -e
+          SMOKE_ROOT="${RUNNER_TEMP}/hrt_chip_smoke"
+          mkdir -p "$SMOKE_ROOT"
+          uv run hrt-chip run --benchmark ibm01 --seed 1 --candidates 2 --output-dir "$SMOKE_ROOT" --run-id phase6-smoke-run
+          uv run hrt-chip replay "$SMOKE_ROOT/phase6-smoke-run/manifest.json" --verify
+
+      - name: Benchmark sweep subset (stub)
+        run: |
+          uv run hrt-chip benchmark-sweep --evaluator stub --benchmark ibm01 --benchmark ibm02 \
+            --candidates 1 --output-dir "${RUNNER_TEMP}/hrt_sweep_smoke" --sweep-id ci_subset

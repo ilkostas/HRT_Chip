@@ -57,6 +57,26 @@ def test_build_sweep_report_json_shape() -> None:
     assert len(d["rows"]) == 1
 
 
+def test_run_ibm_benchmark_sweep_stub_two_benchmarks(tmp_path: Path) -> None:
+    base = RunConfig(
+        benchmark_id="ibm01",
+        seed=0,
+        num_candidates=1,
+        output_dir=tmp_path,
+        evaluator_backend="stub",
+        guidance_preset=None,
+    )
+    report, meta = run_ibm_benchmark_sweep(
+        base,
+        sweep_output_dir=tmp_path,
+        sweep_id="two_bench",
+        benchmarks=("ibm01", "ibm02"),
+    )
+    assert len(report.rows) == 2
+    assert {r.benchmark_id for r in report.rows} == {"ibm01", "ibm02"}
+    assert (meta["sweep_root"] / "sweep_report.json").is_file()
+
+
 def test_run_ibm_benchmark_sweep_stub_subset(tmp_path: Path) -> None:
     base = RunConfig(
         benchmark_id="ibm01",

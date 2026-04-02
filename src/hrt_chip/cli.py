@@ -13,10 +13,18 @@ from hrt_chip.benchmark_sweep import run_ibm_benchmark_sweep
 from hrt_chip.benchmarks import (
     AGGREGATE_REPLACE_PROXY,
     AGGREGATE_SA_PROXY,
+    IBM_BENCHMARKS,
     REPLACE_BASELINE_BY_DESIGN,
     SA_BASELINE_BY_DESIGN,
 )
-from hrt_chip.config import EvaluatorBackend, RunConfig, SamplerBackend, SyntheticDatasetConfig, TrainingConfig
+from hrt_chip.config import (
+    ArtifactRetentionMode,
+    EvaluatorBackend,
+    RunConfig,
+    SamplerBackend,
+    SyntheticDatasetConfig,
+    TrainingConfig,
+)
 from hrt_chip.pipeline import replay_from_manifest, run_pipeline
 
 app = typer.Typer(no_args_is_help=True, help="HRT macro placement pipeline.")
@@ -107,12 +115,34 @@ def run(
         "--testcase-root",
         help="ICCAD04 testcase root (default: env HRT_CHIP_TESTCASE_ROOT or external/MacroPlacement/Testcases/ICCAD04).",
     ),
+    deterministic: bool = typer.Option(
+        True,
+        "--deterministic/--no-deterministic",
+        help="Seed RNGs for repeatable runs (default: on).",
+    ),
+    deterministic_verification: bool = typer.Option(
+        False,
+        "--deterministic-verification",
+        help="Phase 6: strict PyTorch/cuDNN determinism (slower; use with replay --verify).",
+    ),
+    artifact_retention: str = typer.Option(
+        "full",
+        "--artifact-retention",
+        help="Phase 6: full | compact | best_only (per-candidate JSON pruning after run).",
+    ),
+    artifact_retention_top_k: Optional[int] = typer.Option(
+        None,
+        "--artifact-retention-top-k",
+        help="With compact retention, keep top-K candidate JSONs by proxy (omit = keep none).",
+    ),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     if evaluator not in ("stub", "official"):
         raise typer.BadParameter("--evaluator must be stub or official")
+    if artifact_retention not in ("full", "compact", "best_only"):
+        raise typer.BadParameter("--artifact-retention must be full, compact, or best_only")
     gw = _parse_guidance_weight_triples(guidance_weight)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
     cfg = RunConfig(
@@ -121,7 +151,10 @@ def run(
         num_candidates=candidates,
         diffusion_steps=diffusion_steps,
         output_dir=output_dir,
-        deterministic=True,
+        deterministic=deterministic,
+        deterministic_verification=deterministic_verification,
+        artifact_retention=cast(ArtifactRetentionMode, artifact_retention),
+        artifact_retention_top_k=artifact_retention_top_k,
         guidance_preset=None if gw else guidance_preset,
         guidance_weights_sweep=gw,
         sampler_backend=cast(SamplerBackend, sampler_backend),
@@ -138,11 +171,26 @@ def run(
 @app.command("replay")
 def replay_cmd(
     manifest: Path = typer.Argument(..., exists=True, help="Path to manifest.json from a prior run."),
+    verify: bool = typer.Option(
+        False,
+        "--verify",
+        "-v",
+        help="Phase 6: compare replay to existing results.json; write replay_verification.json; exit 1 on mismatch.",
+    ),
 ) -> None:
     """Re-execute pipeline from a saved manifest (reproducibility check)."""
-    results = replay_from_manifest(str(manifest))
+    results = replay_from_manifest(str(manifest), verify=verify)
     cfg = RunConfig.from_dict(results["manifest"]["config"])
     _print_summary(results, cfg)
+    rv = results.get("replay_verification")
+    if verify and rv is not None:
+        if rv.get("ok"):
+            console.print("[bold green]Replay verification: PASS[/bold green]")
+        else:
+            console.print("[bold red]Replay verification: FAIL[/bold red]")
+            for m in rv.get("mismatches") or []:
+                console.print(f"  - {m}")
+            raise typer.Exit(code=1)
 
 
 @app.command("dataset-generate")
@@ -300,6 +348,12 @@ def benchmark_sweep_cmd(
     checkpoint: Optional[Path] = typer.Option(None, "--checkpoint"),
     training_dataset_version: Optional[str] = typer.Option(None, "--training-dataset-version"),
     model_architecture: Optional[str] = typer.Option(None, "--model-architecture"),
+    benchmark: Optional[list[str]] = typer.Option(
+        None,
+        "--benchmark",
+        "-b",
+        help="Restrict sweep to these benchmark ids (repeatable). Default: all 17 IBM designs.",
+    ),
 ) -> None:
     """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
     if evaluator not in ("stub", "official"):
@@ -324,7 +378,18 @@ def benchmark_sweep_cmd(
         evaluator_backend=cast(EvaluatorBackend, evaluator),
         testcase_root=testcase_root,
     )
-    report, meta = run_ibm_benchmark_sweep(base, sweep_output_dir=output_dir, sweep_id=sweep_id)
+    bench_tuple: tuple[str, ...] | None = None
+    if benchmark:
+        bench_tuple = tuple(benchmark)
+        unknown = set(bench_tuple) - set(IBM_BENCHMARKS)
+        if unknown:
+            raise typer.BadParameter(f"Unknown benchmark id(s): {sorted(unknown)}")
+    report, meta = run_ibm_benchmark_sweep(
+        base,
+        sweep_output_dir=output_dir,
+        sweep_id=sweep_id,
+        benchmarks=bench_tuple,
+    )
     sweep_root = meta["sweep_root"]
 
     console.print(f"[bold green]Benchmark sweep[/bold green] sweep_id={report.sweep_id}")

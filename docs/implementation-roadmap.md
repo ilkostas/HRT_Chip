@@ -160,6 +160,8 @@ Risks:
 
 - Deterministic mode can reduce performance if used indiscriminately.
 
+**Implementation status (this repo):** Done. Centralized determinism: [`src/hrt_chip/deterministic_runtime.py`](../src/hrt_chip/deterministic_runtime.py); `RunConfig.deterministic_verification`, `artifact_retention` / `artifact_retention_top_k` in [`src/hrt_chip/config.py`](../src/hrt_chip/config.py); pipeline hooks + retention in [`src/hrt_chip/pipeline.py`](../src/hrt_chip/pipeline.py); replay fingerprint compare in [`src/hrt_chip/replay_verify.py`](../src/hrt_chip/replay_verify.py); manifest field `deterministic_verification` + `replay_verification.json` via [`src/hrt_chip/io/artifacts.py`](../src/hrt_chip/io/artifacts.py); CLI flags on `hrt-chip run` / `replay --verify` / `benchmark-sweep --benchmark` in [`src/hrt_chip/cli.py`](../src/hrt_chip/cli.py); CI workflow [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); tests in [`tests/test_phase6.py`](../tests/test_phase6.py).
+
 ## Dependency Flow
 
 ```mermaid

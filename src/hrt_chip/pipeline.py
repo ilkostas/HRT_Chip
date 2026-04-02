@@ -11,10 +11,17 @@ from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
 from hrt_chip.benchmarks import default_testcase_root
 from hrt_chip.config import RunConfig, resolved_guidance_sweep
+from hrt_chip.deterministic_runtime import apply_pipeline_determinism
 from hrt_chip.diffusion import DiffusionSampler
 from hrt_chip.geometry import placement_is_legal
 from hrt_chip.guidance import compute_objectives_for_candidate
-from hrt_chip.io.artifacts import PipelineArtifacts, build_manifest, write_json
+from hrt_chip.io.artifacts import (
+    PipelineArtifacts,
+    apply_candidate_retention,
+    build_manifest,
+    write_json,
+)
+from hrt_chip.replay_verify import compare_replay_to_baseline
 from hrt_chip.stages.evaluate import evaluate_candidate
 from hrt_chip.stages.generate import generate_candidates
 from hrt_chip.stages.legalize import legalize_candidate
@@ -65,6 +72,8 @@ def run_pipeline(
 
     Returns structured dict suitable for JSON serialization and CLI display.
     """
+    apply_pipeline_determinism(config)
+
     testcase_path = config.testcase_root or Path(default_testcase_root())
     bench_obj: Any | None = None
     macro_specs_arg: Any = None
@@ -211,18 +220,62 @@ def run_pipeline(
         "evaluations": evaluations,
     }
     write_json(artifacts.results_path, results)
+
+    apply_candidate_retention(
+        artifacts,
+        results,
+        mode=config.artifact_retention,
+        top_k=config.artifact_retention_top_k,
+    )
+
     return results
 
 
-def replay_from_manifest(manifest_path: str) -> dict[str, Any]:
+def replay_from_manifest(
+    manifest_path: str,
+    *,
+    verify: bool = False,
+) -> dict[str, Any]:
     """
     Re-run pipeline from a saved manifest.json (same config snapshot).
 
     Intended for reproducibility checks; requires manifest written by a prior run.
+
+    If ``verify`` is True, compares the new run to ``results.json`` beside the manifest
+    before it is overwritten (load baseline first), then writes ``replay_verification.json``.
     """
+    import json
     from pathlib import Path
 
     p = Path(manifest_path)
-    data = __import__("json").loads(p.read_text(encoding="utf-8"))
+    data = json.loads(p.read_text(encoding="utf-8"))
     cfg = RunConfig.from_dict(data["config"])
-    return run_pipeline(cfg, run_id=data["run_id"])
+    run_dir = p.parent
+    baseline_results: dict[str, Any] | None = None
+    if verify:
+        baseline_path = run_dir / "results.json"
+        if baseline_path.is_file():
+            baseline_results = json.loads(baseline_path.read_text(encoding="utf-8"))
+
+    results = run_pipeline(cfg, run_id=data["run_id"])
+
+    if verify:
+        report: dict[str, Any]
+        if baseline_results is None:
+            report = {
+                "ok": False,
+                "mismatches": [f"Missing baseline file: {run_dir / 'results.json'}"],
+                "baseline_fingerprint": None,
+                "replay_fingerprint": None,
+            }
+        else:
+            report = compare_replay_to_baseline(baseline_results, results)
+        from hrt_chip.io.artifacts import utc_now_iso
+
+        report["verified_at_utc"] = utc_now_iso()
+        report["manifest_path"] = str(p.resolve())
+        artifacts = PipelineArtifacts(run_dir=run_dir)
+        write_json(artifacts.replay_verification_path, report)
+        results = {**results, "replay_verification": report}
+
+    return results

@@ -125,7 +125,7 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Current Project Status
 
-Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, **Phase 3 guided objectives / Pareto-style batch selection**, **Phase 4 synthetic data + PyTorch/PyG DDPM training**, and **Phase 5 benchmark harness + milestone gates** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** (default) or a **trained PyTorch checkpoint** (`--sampler-backend pytorch_checkpoint --checkpoint …`) that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the physical or unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the evaluator proxy** (stub or official). **Phase 5** adds **`hrt-chip benchmark-sweep`** over all 17 IBM designs (`ibm01`–`ibm04`, `ibm06`–`ibm18`), aggregate proxy vs **SA (2.1251)** and **RePlAce (1.4578)** baselines, and **Gate A/B/C** reporting; sweep artifacts include `sweep_report.json`. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`, optional `checkpoint_path` / `training_dataset_version`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the evaluator.
+Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, **Phase 3 guided objectives / Pareto-style batch selection**, **Phase 4 synthetic data + PyTorch/PyG DDPM training**, **Phase 5 benchmark harness + milestone gates**, and **Phase 6 reproducibility / regression controls** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** (default) or a **trained PyTorch checkpoint** (`--sampler-backend pytorch_checkpoint --checkpoint …`) that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the physical or unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the evaluator proxy** (stub or official). **Phase 5** adds **`hrt-chip benchmark-sweep`** over all 17 IBM designs (`ibm01`–`ibm04`, `ibm06`–`ibm18`), aggregate proxy vs **SA (2.1251)** and **RePlAce (1.4578)** baselines, and **Gate A/B/C** reporting; sweep artifacts include `sweep_report.json`. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`, optional `checkpoint_path` / `training_dataset_version`), and per-candidate JSON (optional pruning via **artifact retention**). **Phase 6** adds centralized RNG seeding (`deterministic_runtime`), optional **`--deterministic-verification`** (stricter PyTorch/cuDNN), **`hrt-chip replay … --verify`** (writes `replay_verification.json`), and **GitHub Actions** CI (pytest + stub replay + small benchmark subset). Illegal placements skip mixed-size handoff and receive infinite proxy from the evaluator.
 
 ### What Exists
 
@@ -137,6 +137,7 @@ Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inferenc
 - Phase 3 guidance sweep, surrogate objectives, scoring table, strict proxy selection ([`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py), [`tests/test_phase3_guidance.py`](tests/test_phase3_guidance.py)).
 - Adapter contracts for evaluator and mixed-size backend ([`docs/integration-notes.md`](docs/integration-notes.md)).
 - Phase 5 IBM sweep + gates: [`src/hrt_chip/benchmarks.py`](src/hrt_chip/benchmarks.py), [`src/hrt_chip/benchmark_sweep.py`](src/hrt_chip/benchmark_sweep.py), [`src/hrt_chip/adapters/evaluator/official.py`](src/hrt_chip/adapters/evaluator/official.py); tests in [`tests/test_phase5_benchmarks.py`](tests/test_phase5_benchmarks.py).
+- Phase 6 reproducibility: [`src/hrt_chip/deterministic_runtime.py`](src/hrt_chip/deterministic_runtime.py), [`src/hrt_chip/replay_verify.py`](src/hrt_chip/replay_verify.py), retention helpers in [`src/hrt_chip/io/artifacts.py`](src/hrt_chip/io/artifacts.py); tests in [`tests/test_phase6.py`](tests/test_phase6.py); workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ### What Is Still Stubbed / Planned
 
@@ -150,6 +151,8 @@ Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inferenc
 
 ```bash
 uv sync
+# include dev deps (pytest) for local testing / CI parity
+uv sync --group dev
 ```
 
 Run the end-to-end stub pipeline (example: benchmark `ibm01`, 4 candidates, fixed seed):
@@ -197,6 +200,9 @@ uv run hrt-chip benchmark-sweep --output-dir runs/sweeps --seed 42 --candidates 
 
 # Fast local / CI without official testcase tree
 uv run hrt-chip benchmark-sweep --evaluator stub --output-dir runs/sweeps_stub
+
+# Subset of benchmarks (repeat --benchmark); gates use only rows in this sweep
+uv run hrt-chip benchmark-sweep --evaluator stub --benchmark ibm01 --benchmark ibm02 --candidates 1
 ```
 
 Writes `runs/sweeps/<sweep_id>/sweep_report.json` and per-benchmark run dirs. Prints **Gate A** (100% legal), **Gate B** (mean proxy lower than aggregate SA **2.1251**), **Gate C** (mean proxy lower than aggregate RePlAce **1.4578**).
@@ -214,6 +220,23 @@ Re-run from a saved manifest (reproducibility):
 ```bash
 uv run hrt-chip replay runs/<run_id>/manifest.json
 ```
+
+**Phase 6 — deterministic verification and artifact retention**
+
+```bash
+# Strict PyTorch/cuDNN determinism (optional; slower)
+uv run hrt-chip run --benchmark ibm01 --seed 42 --deterministic-verification --output-dir runs
+
+# After a run, replay and assert ranking/proxy/best match prior results.json (exit 1 on mismatch)
+uv run hrt-chip replay runs/<run_id>/manifest.json --verify
+
+# Prune per-candidate JSON on disk (full ranking remains in results.json)
+uv run hrt-chip run --benchmark ibm01 --artifact-retention compact --output-dir runs
+uv run hrt-chip run --benchmark ibm01 --artifact-retention compact --artifact-retention-top-k 2 --output-dir runs
+uv run hrt-chip run --benchmark ibm01 --artifact-retention best_only --output-dir runs
+```
+
+**CI:** on push/PR, `.github/workflows/ci.yml` runs `uv sync --group dev`, `pytest`, stub `run` + `replay --verify`, and a two-benchmark stub sweep.
 
 ### AWS / local secrets (when using cloud evaluators)
 
@@ -238,10 +261,11 @@ Details: [`docs/integration-notes.md`](docs/integration-notes.md).
 
 This project treats reproducibility as mandatory:
 
-- Lock random seeds for training and inference (stub generation uses `--seed`).
-- Each run writes `manifest.json` with config snapshot, run id, and UTC timestamp.
-- `hrt-chip replay` re-executes from a saved manifest.
-- Future: deterministic verification mode and CI smoke (roadmap Phase 6).
+- Lock random seeds for training and inference (stub generation uses `--seed`; pipeline calls [`deterministic_runtime`](src/hrt_chip/deterministic_runtime.py) when `deterministic` is on).
+- Each run writes `manifest.json` with config snapshot, run id, UTC timestamp, and Phase 6 `deterministic_verification` flag.
+- `hrt-chip replay` re-executes from a saved manifest; **`--verify`** compares to the previous `results.json` and writes `replay_verification.json`.
+- Optional **`--artifact-retention`** reduces on-disk candidate JSON while keeping full scores in `results.json`.
+- CI runs pytest plus end-to-end stub checks (see `.github/workflows/ci.yml`).
 
 ## Next Milestones (Suggested)
 
@@ -251,7 +275,8 @@ This project treats reproducibility as mandatory:
 4. ~~Guided objectives + strict proxy selection policy (Phase 3).~~
 5. ~~Synthetic data generation, PyTorch/PyG DDPM training, and checkpoint-based sampler inference (Phase 4).~~
 6. ~~Experiment harness for 17 IBM benchmark sweeps, gate reporting, and `sweep_report.json` (Phase 5).~~
-7. Add NG45-oriented handoff format/export path for downstream validation.
+7. ~~Reproducibility: deterministic verification, replay `--verify`, artifact retention, CI smoke (Phase 6).~~
+8. Add NG45-oriented handoff format/export path for downstream validation.
 
 ## References
 

@@ -29,6 +29,9 @@ SamplerBackend = Literal["stub", "pytorch_checkpoint"]
 # Phase 5: tier-1 evaluator (stub for dev; official requires macro_place + MacroPlacement testcases).
 EvaluatorBackend = Literal["stub", "official"]
 
+# Phase 6: how many per-candidate JSON files to keep on disk after a run.
+ArtifactRetentionMode = Literal["full", "compact", "best_only"]
+
 
 def resolved_guidance_sweep(
     *,
@@ -147,6 +150,16 @@ class RunConfig:
     testcase_root: Path | None = None
     """Directory containing ``<benchmark_id>/netlist.pb.txt`` (ICCAD04). Defaults via env / benchmarks.default_testcase_root."""
 
+    # Phase 6: reproducibility / disk policy.
+    deterministic_verification: bool = False
+    """If True, apply strict PyTorch/cuDNN determinism toggles (may reduce performance)."""
+
+    artifact_retention: ArtifactRetentionMode = "full"
+    """``full``: keep all candidate JSONs; ``compact``: drop per-candidate files (summary stays in results.json); ``best_only``: keep only the selected best candidate file."""
+
+    artifact_retention_top_k: int | None = None
+    """When ``artifact_retention`` is ``compact``, optionally keep the top-K candidate JSONs by proxy (lowest first). ``None`` means keep none."""
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["output_dir"] = str(self.output_dir)
@@ -184,4 +197,8 @@ class RunConfig:
             out["testcase_root"] = Path(tr)
         else:
             out["testcase_root"] = None
+        # Phase 6 defaults for older manifests.
+        out.setdefault("deterministic_verification", False)
+        out.setdefault("artifact_retention", "full")
+        out.setdefault("artifact_retention_top_k", None)
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})
