@@ -19,6 +19,7 @@ from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.contracts import DOCKER_LOG_NAME, OUTPUT_SCHEMA_V1
 from hrt_chip.adapters.mixed_size.runner import (
     build_input_payload,
+    DockerRunResult,
     parse_extra_docker_args,
     read_output_json,
     run_dreamplace_container,
@@ -131,16 +132,28 @@ class DreamPlaceDockerBackend(MixedSizeBackend):
                         "docker_exe": docker_exe,
                     },
                 )
-            except subprocess.TimeoutExpired:
-                return MixedSizeResult(
-                    ok=False,
-                    message=f"docker run exceeded timeout ({timeout}s)",
-                    extra={
-                        "benchmark_id": request.benchmark_id,
-                        "backend": v.backend_key,
-                        "image": image,
-                        "work_dir": str(cand_work.resolve()),
-                    },
+            except subprocess.TimeoutExpired as e:
+                # Allow transient timeouts to be retried when the operator configured retries.
+                if attempt >= retries:
+                    return MixedSizeResult(
+                        ok=False,
+                        message=f"docker run exceeded timeout ({timeout}s)",
+                        extra={
+                            "benchmark_id": request.benchmark_id,
+                            "backend": v.backend_key,
+                            "image": image,
+                            "work_dir": str(cand_work.resolve()),
+                            "timeout_seconds": timeout,
+                        },
+                    )
+
+                stdout = getattr(e, "stdout", None) or getattr(e, "output", None) or ""
+                stderr = getattr(e, "stderr", None) or ""
+                last_dr = DockerRunResult(
+                    returncode=124,
+                    stdout=str(stdout),
+                    stderr=str(stderr),
+                    elapsed_seconds=float(timeout),
                 )
 
             log_path = cand_work / DOCKER_LOG_NAME
@@ -186,6 +199,24 @@ class DreamPlaceDockerBackend(MixedSizeBackend):
             return MixedSizeResult(
                 ok=False,
                 message=f"unexpected output schema: {out.get('schema')!r}",
+                extra={"benchmark_id": request.benchmark_id, "backend": v.backend_key},
+            )
+
+        # Minimal output contract validation so unexpected container outputs do
+        # not silently degrade downstream ranking.
+        missing: list[str] = []
+        if "ok" not in out:
+            missing.append("ok")
+        if "message" not in out:
+            missing.append("message")
+        if out.get("density_overflow") is None and out.get("density_overflow_proxy") is None:
+            missing.append("density_overflow")
+        if out.get("rudy_or_route_proxy") is None and out.get("rudy_density_variance") is None:
+            missing.append("rudy_or_route_proxy")
+        if missing:
+            return MixedSizeResult(
+                ok=False,
+                message=f"invalid output contract (missing keys: {missing})",
                 extra={"benchmark_id": request.benchmark_id, "backend": v.backend_key},
             )
 
