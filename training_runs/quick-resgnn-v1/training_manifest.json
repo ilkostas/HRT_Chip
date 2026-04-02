@@ -1,0 +1,22 @@
+{
+  "checkpoint_path": "C:\\Users\\Venorth\\Desktop\\prog\\GitHub\\HRT_Chip\\training_runs\\quick-resgnn-v1\\checkpoint.pt",
+  "config": {
+    "batch_size": 8,
+    "dataset_dir": "data\\synthetic\\v1_quick",
+    "diffusion_steps": 100,
+    "epochs": 5,
+    "hidden_dim": 64,
+    "learning_rate": 0.001,
+    "model_architecture": "res_gnn",
+    "num_layers": 3,
+    "output_dir": "training_runs",
+    "seed": 42,
+    "train_run_id": "quick-resgnn-v1"
+  },
+  "created_at_utc": "2026-04-02T10:18:12.295263+00:00",
+  "dataset_manifest_path": "C:\\Users\\Venorth\\Desktop\\prog\\GitHub\\HRT_Chip\\data\\synthetic\\v1_quick\\dataset_manifest.json",
+  "dataset_version": "quick-v1",
+  "metrics_path": "C:\\Users\\Venorth\\Desktop\\prog\\GitHub\\HRT_Chip\\training_runs\\quick-resgnn-v1\\metrics.json",
+  "notes": "Phase 4 DDPM epsilon training",
+  "train_run_id": "quick-resgnn-v1"
+}

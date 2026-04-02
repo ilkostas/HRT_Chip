@@ -1,0 +1,11 @@
+{
+  "corpus_version": "v1",
+  "curriculum": "grid_v1",
+  "dataset_version": "quick-v1",
+  "n_macros_max": 8,
+  "n_macros_min": 2,
+  "num_samples": 128,
+  "output_dir": "data\\synthetic\\v1_quick",
+  "schema_version": "hrt_synthetic_pyg_v1",
+  "seed": 42
+}
