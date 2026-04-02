@@ -85,7 +85,7 @@ Note: Some diffusion-placement papers discuss dynamic, gradient-based “legalit
 - **Legality potential:** built from **pairwise** rectangular geometry; one form penalizes **squared signed distance**—e.g. **∑_{i,j} min(0, d_ij(x))²** over macro pairs, where *d_ij* is the signed gap between rectangles (negative when overlapping).
 - **HPWL potential:** a differentiable wirelength surrogate (see [`step1-diffusion-model.md`](./step1-diffusion-model.md) §4).
 
-**Dynamic weights:** Gradients are combined using **Lagrangian multipliers** adjusted via **interleaved gradient-style** updates so the trade-off between overlap and HPWL can adapt across circuits—avoid fixing a single weight for all benchmarks.
+**Dynamic weights (conceptual):** Some diffusion-placement papers describe adapting legality weights during sampling via Lagrange multipliers and interleaved gradient-style updates. This repository does not implement that dynamic scheduling; it uses fixed `(α, β, γ)` exploration weights per candidate/weight-vector, and enforces strict legality via the greedy legalization pass (Step 2).
 
 ### Coordinate parameterization (generated centers for surrogates + legalizer)
 
