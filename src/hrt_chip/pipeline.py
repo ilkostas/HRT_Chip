@@ -48,6 +48,7 @@ def run_pipeline(
         benchmark_id=config.benchmark_id,
         seed=config.seed,
         num_candidates=config.num_candidates,
+        diffusion_steps=config.diffusion_steps,
     )
 
     evaluations: list[dict[str, Any]] = []
@@ -97,9 +98,16 @@ def run_pipeline(
             best = er
             best_candidate_id = er.candidate_id
 
+    sampler_provenance: dict[str, Any] | None = None
+    if raw:
+        sp = raw[0].metadata.get("sampler")
+        if isinstance(sp, dict):
+            sampler_provenance = dict(sp)
+
     results: dict[str, Any] = {
         "manifest": manifest.to_dict(),
         "benchmark_id": config.benchmark_id,
+        "sampler_provenance": sampler_provenance,
         "ranking": sorted(evaluations, key=lambda r: r["proxy_score"]),
         "best_candidate_id": best_candidate_id,
         "best_proxy_score": best.proxy_score if best else None,

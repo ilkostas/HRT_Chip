@@ -63,6 +63,25 @@ def placement_is_legal(
     return True
 
 
+def normalized_center_to_lower_left(
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+    *,
+    canvas_w: float = 1.0,
+    canvas_h: float = 1.0,
+) -> tuple[float, float]:
+    """
+    Map a macro center in [-1, 1]² to lower-left (x, y) on the unit canvas [0, canvas_w] × [0, canvas_h].
+
+    Linear map per axis: center = (c + 1) / 2 * extent, then x = center_x - w/2, y = center_y - h/2.
+    """
+    center_x = (cx + 1.0) * 0.5 * canvas_w
+    center_y = (cy + 1.0) * 0.5 * canvas_h
+    return (center_x - w / 2.0, center_y - h / 2.0)
+
+
 def clamp_macro_to_canvas(
     m: MacroRect,
     *,

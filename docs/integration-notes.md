@@ -1,6 +1,12 @@
-# Integration Notes (Phase 0)
+# Integration Notes (Phase 0–2)
 
-This document describes how the executable pipeline connects to external competition assets and backends. Phase 0 runs **fully locally** using stub adapters; no submodule checkout is required to execute `hrt-chip run`.
+This document describes how the executable pipeline connects to external competition assets and backends. Phase 0–2 run **fully locally** using stub adapters for evaluator, mixed-size, and diffusion sampling; no submodule checkout is required to execute `hrt-chip run`.
+
+## Diffusion sampler (Phase 2)
+
+- **Contract:** [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) — `DiffusionSampler.sample_batch(DiffusionSampleRequest) -> SampleBatch`. The request includes the **full macro set**; each candidate in the batch carries **all** macro centers in normalized **`[-1, 1]`** space (`coord_space: normalized_centers_-1_1`).
+- **Stub:** `DeterministicDDPMStubSampler` — deterministic RNG layout for development; records provenance (`sampler_name`, `model_stub`, `generation_mode`, `diffusion_steps`) in `PlacementCandidate.metadata["sampler"]` and in `results.json` as `sampler_provenance`.
+- **Integration (Phase 4+):** Implement a PyTorch-backed sampler that satisfies `DiffusionSampler`, load trained ε-prediction weights, and swap the default in `generate_candidates(..., sampler=...)`. Keep the adapter boundary so `run_pipeline` stays unchanged.
 
 ## Evaluator adapter
 
@@ -17,7 +23,7 @@ This document describes how the executable pipeline connects to external competi
 ## Official challenge repository (`external/`)
 
 - Add the official Partcl/HRT challenge repository as a **git submodule** under [`external/`](../external/) when you are ready to pin a specific evaluator revision.
-- Until then, [`external/.gitkeep`](../external/.gitkeep) reserves the directory; the codebase does not import submodule paths at Phase 0.
+- Until then, [`external/.gitkeep`](../external/.gitkeep) reserves the directory; the codebase does not import submodule paths at install time.
 - See [README.md](../README.md) for the intended submodule workflow.
 
 ## AWS / environment

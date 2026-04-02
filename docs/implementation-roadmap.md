@@ -65,6 +65,8 @@ Deliverables:
 - Reproducibility hooks: run id, seed locking, config snapshot, artifact manifest.
 - Architecture guardrail tests to prevent accidental RL branch creep.
 
+**Implementation status (this repo):** Done. Code: [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) (`DiffusionSampler`, `DeterministicDDPMStubSampler`, normalized `[-1, 1]` centers), generate stage ([`src/hrt_chip/stages/generate.py`](../src/hrt_chip/stages/generate.py)), `results.json` field `sampler_provenance`, tests in [`tests/test_diffusion_guardrails.py`](../tests/test_diffusion_guardrails.py). PyTorch, ResGNN/AttGNN, and training remain **Phase 4**.
+
 Done criteria:
 
 - Batched candidate generation works through the full pipeline.

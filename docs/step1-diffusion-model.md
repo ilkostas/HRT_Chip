@@ -4,6 +4,10 @@ To build a diffusion model for chip placement, you shift perspective away from t
 
 **Primary methodology reference:** *Chip Placement with Diffusion Models* (Lee et al., 2024). Align the implementation with that paper’s architecture, training, and guidance; the HPWL / congestion figures in §6 are **evaluated results** from that work on ICCAD04 (IBM), not illustrative ballparks.
 
+### Implementation status (this repository)
+
+**Phase 2 (current code)** wires a **sampler interface** and **deterministic DDPM stub** only: no PyTorch, no neural forward pass, no ResGNN/AttGNN yet. The stub emits macro centers in **`[-1, 1]`**, which the pipeline maps to unit-canvas `MacroRect` lower-left coordinates for the Phase 1 legalizer (see [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py), [`src/hrt_chip/stages/generate.py`](../src/hrt_chip/stages/generate.py)). **Phase 4** is the intended milestone for synthetic data, PyTorch training, and real reverse diffusion sampling; **Phase 3** adds guidance objectives at inference time.
+
 ## Reinforcement learning vs. diffusion
 
 In standard **reinforcement learning (RL)**, placement is modeled as a **Markov decision process (MDP)**. The RL agent places **one macro at a time**, sequentially. If the agent commits a suboptimal placement early, it cannot easily backtrack, which can cause **cascading errors**. Because placement is sequential, evaluating the final layout is expensive, so training and inference tend to be **slow**.

@@ -100,9 +100,9 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Repository Map
 
-**Code (Phase 0–1):**
+**Code (Phase 0–2):**
 
-- [`src/hrt_chip/`](src/hrt_chip/) — package: CLI, pipeline, stages, adapters, artifacts.
+- [`src/hrt_chip/`](src/hrt_chip/) — package: CLI, pipeline, stages, [`diffusion.py`](src/hrt_chip/diffusion.py) (sampler contract + DDPM stub), adapters, artifacts.
 - [`docs/integration-notes.md`](docs/integration-notes.md) — evaluator and mixed-size integration contracts.
 - [`external/`](external/) — reserved for official challenge submodule (see integration notes).
 
@@ -125,7 +125,7 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Current Project Status
 
-Phase 0 scaffolding and **Phase 1 legality baseline** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**, shared geometry checks ([`src/hrt_chip/geometry.py`](src/hrt_chip/geometry.py)), and structured artifacts (manifest + per-candidate JSON + `results.json`). Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
+Phase 0 scaffolding, **Phase 1 legality baseline**, and **Phase 2 diffusion inference skeleton** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
 
 ### What Exists
 
@@ -133,11 +133,13 @@ Phase 0 scaffolding and **Phase 1 legality baseline** are in place: a **`uv`-man
 - Constraint analysis and evaluation framing.
 - Cross-step conceptual pipeline.
 - Runnable package [`src/hrt_chip/`](src/hrt_chip/) with CLI `hrt-chip` and module entrypoint `python -m hrt_chip`.
+- Diffusion sampler contract + stub ([`src/hrt_chip/diffusion.py`](src/hrt_chip/diffusion.py)), batched candidate generation, and guardrail tests ([`tests/test_diffusion_guardrails.py`](tests/test_diffusion_guardrails.py)).
 - Adapter contracts for evaluator and mixed-size backend ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
 ### What Is Still Stubbed / Planned
 
-- Real diffusion training and sampling (Phase 2+).
+- PyTorch DDPM network, training loop, and real reverse diffusion (Phase 4+).
+- Inference-time objective guidance (HPWL / legality potentials) and Pareto selection (Phase 3).
 - Official benchmark harness over all 17 IBM designs (Phase 5).
 - Real evaluator and DREAMPlace/hMETIS wiring behind adapters ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
@@ -154,6 +156,8 @@ Run the end-to-end stub pipeline (example: benchmark `ibm01`, 4 candidates, fixe
 ```bash
 uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 4 --output-dir runs
 ```
+
+Optional: `--diffusion-steps` (default `1000`) is recorded in the manifest and sampler provenance for forward compatibility with the real DDPM schedule.
 
 Equivalent:
 
@@ -201,8 +205,8 @@ This project treats reproducibility as mandatory:
 
 1. ~~Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.~~
 2. ~~Harden legality checker + greedy legalizer with explicit zero-overlap assertions (Phase 1).~~
-3. Implement diffusion sampling prototype with deterministic/debug reproducibility controls (Phase 2).
-4. Swap stub evaluator for official proxy-compatible adapter (Phase 3+).
+3. ~~Diffusion inference skeleton: sampler contract, batched stub, provenance, guardrail tests (Phase 2).~~
+4. Guided objectives + strict proxy selection policy (Phase 3); official evaluator adapter when available.
 5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
 6. Add NG45-oriented handoff format/export path for downstream validation.
 

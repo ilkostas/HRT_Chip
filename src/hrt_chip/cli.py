@@ -23,6 +23,11 @@ def run(
     candidates: int = typer.Option(
         4, "--candidates", "-k", help="Number of placement candidates to generate."
     ),
+    diffusion_steps: int = typer.Option(
+        1000,
+        "--diffusion-steps",
+        help="DDPM timestep count (stub uses for provenance; PyTorch path in Phase 4).",
+    ),
     output_dir: Path = typer.Option(
         Path("runs"), "--output-dir", "-o", help="Base directory for run artifacts."
     ),
@@ -35,6 +40,7 @@ def run(
         benchmark_id=benchmark,
         seed=seed,
         num_candidates=candidates,
+        diffusion_steps=diffusion_steps,
         output_dir=output_dir,
         deterministic=True,
     )

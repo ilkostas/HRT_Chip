@@ -14,6 +14,7 @@ class RunConfig:
     benchmark_id: str = "ibm01"
     seed: int = 42
     num_candidates: int = 4
+    diffusion_steps: int = 1000
     output_dir: Path = field(default_factory=lambda: Path("runs"))
     deterministic: bool = True
 
