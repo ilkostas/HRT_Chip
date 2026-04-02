@@ -6,7 +6,6 @@ from hrt_chip.geometry import (
     clamp_macro_to_canvas,
     count_overlapping_pairs,
     min_l1_separation_move_b,
-    overlap_area,
     placement_is_legal,
     rects_overlap,
 )

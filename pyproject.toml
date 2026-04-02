@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hrt-chip"
 version = "0.1.0"
-description = "HRT / Partcl macro placement — diffusion-first pipeline (Phase 2 diffusion inference skeleton)"
+description = "HRT / Partcl macro placement — diffusion-first pipeline (Phase 3 guided objectives + proxy selection)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

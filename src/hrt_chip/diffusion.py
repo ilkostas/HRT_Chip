@@ -10,6 +10,16 @@ COORD_SPACE_NORMALIZED = "normalized_centers_-1_1"
 
 
 @dataclass(frozen=True)
+class GuidanceContext:
+    """Inference-time (α, β, γ) attached to a batch request (Phase 3)."""
+
+    sweep_index: int
+    alpha_hpwl: float
+    beta_congestion: float
+    gamma_legality: float
+
+
+@dataclass(frozen=True)
 class MacroSpec:
     """Macro geometry and identity used by generation contracts."""
 
@@ -32,6 +42,7 @@ class DiffusionSampleRequest:
     macro_specs: tuple[MacroSpec, ...]
     coord_space: str = COORD_SPACE_NORMALIZED
     diffusion_steps: int = 1000
+    guidance: GuidanceContext | None = None
 
 
 @dataclass(frozen=True)
@@ -65,9 +76,10 @@ class SamplerProvenance:
     seed: int
     num_candidates: int
     diffusion_steps: int
+    guidance: dict[str, float | int] | None = None
 
-    def to_dict(self) -> dict[str, str | int]:
-        return {
+    def to_dict(self) -> dict[str, str | int | float | dict[str, float | int] | None]:
+        d: dict[str, str | int | float | dict[str, float | int] | None] = {
             "sampler_name": self.sampler_name,
             "model_stub": self.model_stub,
             "generation_mode": self.generation_mode,
@@ -76,6 +88,9 @@ class SamplerProvenance:
             "num_candidates": self.num_candidates,
             "diffusion_steps": self.diffusion_steps,
         }
+        if self.guidance is not None:
+            d["guidance"] = dict(self.guidance)
+        return d
 
 
 @dataclass(frozen=True)
@@ -107,19 +122,38 @@ class DeterministicDDPMStubSampler:
 
     def sample_batch(self, request: DiffusionSampleRequest) -> SampleBatch:
         rng = random.Random(request.seed)
+        bias_x = 0.0
+        bias_y = 0.0
+        if request.guidance is not None:
+            g = request.guidance
+            # Deterministic shifts so different (α,β,γ) explore different regions (stub only).
+            bias_x = (g.alpha_hpwl - g.beta_congestion) * 0.15
+            bias_y = (g.beta_congestion - g.gamma_legality) * 0.15
         out: list[CandidateSample] = []
         for idx in range(request.num_candidates):
             candidate_id = f"cand_{idx:04d}"
             centers: list[MacroCenter] = []
             for spec in request.macro_specs:
+                cx = max(-1.0, min(1.0, rng.uniform(-1.0, 1.0) + bias_x))
+                cy = max(-1.0, min(1.0, rng.uniform(-1.0, 1.0) + bias_y))
                 centers.append(
                     MacroCenter(
                         name=spec.name,
-                        cx=rng.uniform(-1.0, 1.0),
-                        cy=rng.uniform(-1.0, 1.0),
+                        cx=cx,
+                        cy=cy,
                     )
                 )
             out.append(CandidateSample(candidate_id=candidate_id, centers=tuple(centers)))
+
+        guidance_dict: dict[str, float | int] | None = None
+        if request.guidance is not None:
+            gu = request.guidance
+            guidance_dict = {
+                "sweep_index": gu.sweep_index,
+                "alpha_hpwl": gu.alpha_hpwl,
+                "beta_congestion": gu.beta_congestion,
+                "gamma_legality": gu.gamma_legality,
+            }
 
         provenance = SamplerProvenance(
             sampler_name=self.sampler_name,
@@ -129,5 +163,6 @@ class DeterministicDDPMStubSampler:
             seed=request.seed,
             num_candidates=request.num_candidates,
             diffusion_steps=request.diffusion_steps,
+            guidance=guidance_dict,
         )
         return SampleBatch(candidates=tuple(out), provenance=provenance)

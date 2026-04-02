@@ -125,7 +125,7 @@ The repository's analytical stance is that optimization-time surrogates and comp
 
 ## Current Project Status
 
-Phase 0 scaffolding, **Phase 1 legality baseline**, and **Phase 2 diffusion inference skeleton** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
+Phase 0 scaffolding, **Phase 1 legality baseline**, **Phase 2 diffusion inference skeleton**, and **Phase 3 guided objectives / Pareto-style batch selection** are in place: a **`uv`-managed Python package** with a CLI that runs **generate → legalize → mixed-size → evaluate**. Generation uses a **DDPM sampler interface** with a **deterministic stub** that emits normalized centers in **`[-1, 1]`** (stored per candidate as `metadata["normalized_centers"]`), mapped to the unit canvas for [`MacroRect`](src/hrt_chip/models.py) before the greedy legalizer. **Phase 3** adds optional **multi-weight inference sweeps** (`--guidance-preset pareto3` or repeated `--guidance-weight a,b,c`), per-candidate **surrogate objective** fields (HPWL/congestion/legality stubs in [`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py)), and a **`scoring_table`** in `results.json`; the **best candidate is always the argmin of the official evaluator proxy** only. Structured artifacts include `manifest.json`, `results.json` (with `sampler_provenance`, `guidance_sweep_resolved`, `scoring_table`), and per-candidate JSON. Illegal placements skip mixed-size handoff and receive infinite proxy from the stub evaluator.
 
 ### What Exists
 
@@ -134,12 +134,13 @@ Phase 0 scaffolding, **Phase 1 legality baseline**, and **Phase 2 diffusion infe
 - Cross-step conceptual pipeline.
 - Runnable package [`src/hrt_chip/`](src/hrt_chip/) with CLI `hrt-chip` and module entrypoint `python -m hrt_chip`.
 - Diffusion sampler contract + stub ([`src/hrt_chip/diffusion.py`](src/hrt_chip/diffusion.py)), batched candidate generation, and guardrail tests ([`tests/test_diffusion_guardrails.py`](tests/test_diffusion_guardrails.py)).
+- Phase 3 guidance sweep, surrogate objectives, scoring table, strict proxy selection ([`src/hrt_chip/guidance.py`](src/hrt_chip/guidance.py), [`tests/test_phase3_guidance.py`](tests/test_phase3_guidance.py)).
 - Adapter contracts for evaluator and mixed-size backend ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
 ### What Is Still Stubbed / Planned
 
 - PyTorch DDPM network, training loop, and real reverse diffusion (Phase 4+).
-- Inference-time objective guidance (HPWL / legality potentials) and Pareto selection (Phase 3).
+- Differentiable DDPM guidance on ε-prediction / x̂₀ (Phase 4+; Phase 3 provides sweep + surrogate scoring + selection policy).
 - Official benchmark harness over all 17 IBM designs (Phase 5).
 - Real evaluator and DREAMPlace/hMETIS wiring behind adapters ([`docs/integration-notes.md`](docs/integration-notes.md)).
 
@@ -158,6 +159,20 @@ uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 4 --output-dir runs
 ```
 
 Optional: `--diffusion-steps` (default `1000`) is recorded in the manifest and sampler provenance for forward compatibility with the real DDPM schedule.
+
+**Phase 3 — guidance sweep** (multiple weight vectors; `num_candidates` is per vector):
+
+```bash
+uv run hrt-chip run --benchmark ibm01 --seed 42 --candidates 2 --guidance-preset pareto3 --output-dir runs
+```
+
+Custom weights (repeat `--guidance-weight` for each `(α, β, γ)` triple; overrides preset):
+
+```bash
+uv run hrt-chip run --benchmark ibm01 --guidance-weight 0.8,0.1,0.1 --guidance-weight 0.2,0.7,0.1 --candidates 2
+```
+
+`results.json` includes `guidance_sweep_resolved`, `scoring_table` (surrogate + proxy), and `ranking` / `best_candidate_id` by official proxy only.
 
 Equivalent:
 
@@ -206,7 +221,7 @@ This project treats reproducibility as mandatory:
 1. ~~Create baseline project scaffold (`pyproject.toml`, package layout, CLI entrypoint) using `uv`.~~
 2. ~~Harden legality checker + greedy legalizer with explicit zero-overlap assertions (Phase 1).~~
 3. ~~Diffusion inference skeleton: sampler contract, batched stub, provenance, guardrail tests (Phase 2).~~
-4. Guided objectives + strict proxy selection policy (Phase 3); official evaluator adapter when available.
+4. ~~Guided objectives + strict proxy selection policy (Phase 3)~~; official evaluator adapter when available.
 5. Add experiment harness for 17 IBM benchmark sweeps and structured result logging (Phase 5).
 6. Add NG45-oriented handoff format/export path for downstream validation.
 

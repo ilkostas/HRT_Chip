@@ -96,6 +96,8 @@ Risks:
 
 - Surrogate mismatch can create noisy ranking before full evaluator pass.
 
+**Implementation status (this repo):** Done. Guidance/objective surrogates and scoring table: [`src/hrt_chip/guidance.py`](../src/hrt_chip/guidance.py); `DiffusionSampleRequest.guidance` + stub bias in [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py); multi-weight sweep in [`src/hrt_chip/stages/generate.py`](../src/hrt_chip/stages/generate.py); `RunConfig.guidance_preset` / `guidance_weights_sweep` in [`src/hrt_chip/config.py`](../src/hrt_chip/config.py); pipeline `scoring_table`, `guidance_sweep_resolved`, strict `argmin` proxy selection in [`src/hrt_chip/pipeline.py`](../src/hrt_chip/pipeline.py); CLI `--guidance-preset`, `--guidance-weight`; tests in [`tests/test_phase3_guidance.py`](../tests/test_phase3_guidance.py).
+
 ## Phase 4 - Synthetic Data and Minimal Training Loop
 
 Purpose: support diffusion training based only on synthetic layouts.

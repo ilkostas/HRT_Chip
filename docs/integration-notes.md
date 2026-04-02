@@ -1,6 +1,12 @@
-# Integration Notes (Phase 0–2)
+# Integration Notes (Phase 0–3)
 
-This document describes how the executable pipeline connects to external competition assets and backends. Phase 0–2 run **fully locally** using stub adapters for evaluator, mixed-size, and diffusion sampling; no submodule checkout is required to execute `hrt-chip run`.
+This document describes how the executable pipeline connects to external competition assets and backends. Phase 0–3 run **fully locally** using stub adapters for evaluator, mixed-size, and diffusion sampling; no submodule checkout is required to execute `hrt-chip run`.
+
+## Guidance sweep and objectives (Phase 3)
+
+- **Config:** [`src/hrt_chip/config.py`](../src/hrt_chip/config.py) — `guidance_preset` (e.g. `pareto3`) or explicit `guidance_weights_sweep`; `resolved_guidance_sweep()` yields the `(α, β, γ)` list persisted in `results.json` as `guidance_sweep_resolved`.
+- **Generation:** [`src/hrt_chip/stages/generate.py`](../src/hrt_chip/stages/generate.py) — one `sample_batch` per weight vector; optional `DiffusionSampleRequest.guidance` in [`src/hrt_chip/diffusion.py`](../src/hrt_chip/diffusion.py) (stub applies deterministic coordinate bias for diversity).
+- **Surrogates:** [`src/hrt_chip/guidance.py`](../src/hrt_chip/guidance.py) — fast HPWL-bbox, grid congestion, and overlap surrogates for `scoring_table` only; **Tier-1 selection uses evaluator proxy** (`run_pipeline` asserts `best_candidate_id == argmin(proxy_score)`).
 
 ## Diffusion sampler (Phase 2)
 

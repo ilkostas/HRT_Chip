@@ -8,8 +8,9 @@ from hrt_chip.adapters.evaluator.base import EvaluationResult, EvaluatorAdapter
 from hrt_chip.adapters.evaluator.local_stub import LocalStubEvaluator
 from hrt_chip.adapters.mixed_size.base import MixedSizeBackend, MixedSizeRequest
 from hrt_chip.adapters.mixed_size.local_stub import LocalStubMixedSizeBackend
-from hrt_chip.config import RunConfig
+from hrt_chip.config import RunConfig, resolved_guidance_sweep
 from hrt_chip.geometry import placement_is_legal
+from hrt_chip.guidance import compute_objectives_for_candidate
 from hrt_chip.io.artifacts import PipelineArtifacts, build_manifest, write_json
 from hrt_chip.stages.evaluate import evaluate_candidate
 from hrt_chip.stages.generate import generate_candidates
@@ -28,6 +29,8 @@ def run_pipeline(
 
     Illegal macro placements skip mixed-size handoff and receive infinite proxy from the evaluator.
 
+    Final best candidate is always the argmin of official proxy score (Tier-1 selection).
+
     Returns structured dict suitable for JSON serialization and CLI display.
     """
     ev = evaluator or LocalStubEvaluator()
@@ -44,14 +47,20 @@ def run_pipeline(
         "run_id": manifest.run_id,
     }
 
+    sweep = resolved_guidance_sweep(
+        guidance_preset=config.guidance_preset,
+        guidance_weights_sweep=config.guidance_weights_sweep,
+    )
     raw = generate_candidates(
         benchmark_id=config.benchmark_id,
         seed=config.seed,
         num_candidates=config.num_candidates,
         diffusion_steps=config.diffusion_steps,
+        guidance_sweep=sweep,
     )
 
     evaluations: list[dict[str, Any]] = []
+    scoring_table: list[dict[str, Any]] = []
     best: EvaluationResult | None = None
     best_candidate_id: str | None = None
 
@@ -77,6 +86,11 @@ def run_pipeline(
                 "extra": {"benchmark_id": config.benchmark_id, "n_macros": len(cand.macros)},
             }
 
+        objs = compute_objectives_for_candidate(cand)
+        guidance_meta = cand.metadata.get("guidance")
+        if not isinstance(guidance_meta, dict):
+            guidance_meta = {}
+
         er = evaluate_candidate(
             cand,
             ev,
@@ -91,12 +105,30 @@ def run_pipeline(
         }
         evaluations.append(row)
 
+        scoring_table.append(
+            {
+                "candidate_id": er.candidate_id,
+                "proxy_score": er.proxy_score,
+                "legal": er.legal,
+                "guidance": dict(guidance_meta),
+                "surrogate_objectives": objs.to_dict(),
+            }
+        )
+
         cand_path = artifacts.candidates_dir / f"{cand.candidate_id}.json"
         write_json(cand_path, cand.to_dict())
 
         if best is None or er.proxy_score < best.proxy_score:
             best = er
             best_candidate_id = er.candidate_id
+
+    ranking = sorted(evaluations, key=lambda r: r["proxy_score"])
+    if ranking:
+        assert best_candidate_id == ranking[0]["candidate_id"], (
+            "best_candidate_id must be argmin(proxy_score)"
+        )
+        assert best is not None
+        assert ranking[0]["proxy_score"] == best.proxy_score
 
     sampler_provenance: dict[str, Any] | None = None
     if raw:
@@ -107,8 +139,10 @@ def run_pipeline(
     results: dict[str, Any] = {
         "manifest": manifest.to_dict(),
         "benchmark_id": config.benchmark_id,
+        "guidance_sweep_resolved": [list(t) for t in sweep],
         "sampler_provenance": sampler_provenance,
-        "ranking": sorted(evaluations, key=lambda r: r["proxy_score"]),
+        "ranking": ranking,
+        "scoring_table": scoring_table,
         "best_candidate_id": best_candidate_id,
         "best_proxy_score": best.proxy_score if best else None,
         "evaluations": evaluations,
