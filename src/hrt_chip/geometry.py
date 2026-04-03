@@ -43,7 +43,8 @@ def count_overlapping_pairs(
     eps: float = OVERLAP_EPS,
     hard_macro_count: int | None = None,
 ) -> int:
-    hard_n = hard_macro_count if hard_macro_count is not None else len(macros)
+    requested = hard_macro_count if hard_macro_count is not None else len(macros)
+    hard_n = min(requested, len(macros))
     n = 0
     for i in range(hard_n):
         for j in range(i + 1, hard_n):
@@ -63,7 +64,8 @@ def placement_is_legal(
     """Zero pairwise overlap and all macros inside the canvas."""
     if not all(macro_in_canvas(m, canvas_w=canvas_w, canvas_h=canvas_h, eps=eps) for m in macros):
         return False
-    hard_n = hard_macro_count if hard_macro_count is not None else len(macros)
+    requested = hard_macro_count if hard_macro_count is not None else len(macros)
+    hard_n = min(requested, len(macros))
     for i in range(hard_n):
         for j in range(i + 1, hard_n):
             if overlap_area(macros[i], macros[j]) > eps:

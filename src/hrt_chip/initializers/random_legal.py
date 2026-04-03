@@ -29,8 +29,6 @@ def random_legal_candidate(
     centers = bench_obj.macro_positions
     fixed_t = bench_obj.macro_fixed
     fixed_mask = [bool(fixed_t[i].item() if hasattr(fixed_t[i], "item") else fixed_t[i]) for i in range(n)]
-    hard_n = int(getattr(bench_obj, "num_hard_macros", 0) or 0)
-    hard = hard_n if hard_n > 0 else None
 
     macros: list[MacroRect | None] = [None] * n
     for i in range(n):
@@ -64,7 +62,7 @@ def random_legal_candidate(
             y = rng.uniform(0.0, max(0.0, canvas_h - h))
             trial = MacroRect(name=names[idx], x=x, y=y, w=w, h=h)
             trial_list = placed + [trial]
-            if placement_is_legal(trial_list, canvas_w=canvas_w, canvas_h=canvas_h, hard_macro_count=hard):
+            if placement_is_legal(trial_list, canvas_w=canvas_w, canvas_h=canvas_h):
                 macros[idx] = trial
                 ok = True
                 break
