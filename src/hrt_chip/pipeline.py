@@ -95,8 +95,22 @@ def run_pipeline(
     ``ppa_priority`` ranks legal candidates with successful mixed-size backend by composite placement
     metrics first, then proxy.
 
+    When ``config.solver_backend == "search_hybrid"``, runs initialize → SA search → evaluate
+    (see ``docs/hybrid-search-solver.md``).
+
     Returns structured dict suitable for JSON serialization and CLI display.
     """
+    if getattr(config, "solver_backend", "legacy") == "search_hybrid":
+        from hrt_chip.pipeline_search import run_search_pipeline
+
+        return run_search_pipeline(
+            config,
+            evaluator=evaluator,
+            mixed_size=mixed_size,
+            sampler=sampler,
+            run_id=run_id,
+        )
+
     apply_pipeline_determinism(config)
     t_pipeline0 = time.perf_counter()
 

@@ -41,6 +41,12 @@ MixedSizeBackendName = Literal["stub", "estimate", "dreamplace", "dreamplace_rea
 # Final candidate ordering within a run (default preserves proxy-first Tier-1 style).
 SelectionPolicy = Literal["proxy_first", "ppa_priority"]
 
+# Hybrid pivot: legacy diffusion path vs search-centric solver.
+SolverBackend = Literal["legacy", "search_hybrid"]
+
+# Search objective schedule inside SA (HPWL-first then full surrogate).
+SearchObjectiveSchedule = Literal["hpwl_only", "hpwl_then_full", "full_surrogate"]
+
 # Synthetic dataset curriculum (Phase 4+).
 SyntheticCurriculum = Literal["grid_v1", "benchmark_like"]
 
@@ -248,6 +254,46 @@ class RunConfig:
     trends_log_path: str | None = None
     """Append-only JSONL path for sweep trend lines (default: runs/trends/sweep_history.jsonl)."""
 
+    # --- Hybrid search-centric solver (see docs/hybrid-search-solver.md) ---
+    solver_backend: SolverBackend = "legacy"
+    """``legacy``: generate → legalize (default, CI/replay). ``search_hybrid``: initialize → SA → evaluate."""
+
+    search_families: tuple[str, ...] = ("benchmark_jitter", "random_legal")
+    """
+    Seed sources: ``benchmark_jitter``, ``random_legal``, ``diffusion`` (uses sampler when available).
+    Optional: ``analytical_push`` (light force-directed nudge from current positions).
+    """
+
+    search_seeds_per_family: int = 2
+    """Number of deterministic seeds to draw per enabled family."""
+
+    search_screen_seconds: float | None = None
+    """Short SA per seed for ranking; default ~25% of search budget when wall_clock_budget_seconds set."""
+
+    search_refine_top_k: int = 3
+    """After screening, allocate remaining search time to this many best seeds."""
+
+    search_sa_cooling_rate: float = 0.995
+    search_sa_min_temperature: float = 1e-6
+    search_sa_initial_temperature_scale: float = 0.05
+    search_max_shift_fraction: float = 0.3
+    search_max_iterations: int = 500_000
+    search_objective_schedule: SearchObjectiveSchedule = "hpwl_then_full"
+    """``hpwl_then_full``: first ~60% of steps HPWL-only, then full surrogate. ``hpwl_only`` / ``full_surrogate``."""
+
+    search_adaptive_operators: bool = True
+    """Bias operator choice toward accepted improving moves."""
+
+    search_surrogate_min_spearman: float | None = 0.90
+    """If running batch calibration, below this threshold use official-eval anchoring instead of trusting surrogate."""
+
+    search_official_eval_every_n_steps: int | None = None
+    """When surrogate is untrusted, call official evaluator every N SA steps (expensive; None = disabled)."""
+
+    search_enable_net_aware: bool = True
+    search_enable_swap: bool = True
+    search_enable_cluster: bool = True
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["output_dir"] = str(self.output_dir)
@@ -283,6 +329,23 @@ class RunConfig:
         d["dreamplace_mount_testcase"] = self.dreamplace_mount_testcase
         d["dreamplace_docker_extra_args"] = self.dreamplace_docker_extra_args
         d["dreamplace_docker_executable"] = self.dreamplace_docker_executable
+        d["solver_backend"] = self.solver_backend
+        d["search_families"] = list(self.search_families)
+        d["search_seeds_per_family"] = self.search_seeds_per_family
+        d["search_screen_seconds"] = self.search_screen_seconds
+        d["search_refine_top_k"] = self.search_refine_top_k
+        d["search_sa_cooling_rate"] = self.search_sa_cooling_rate
+        d["search_sa_min_temperature"] = self.search_sa_min_temperature
+        d["search_sa_initial_temperature_scale"] = self.search_sa_initial_temperature_scale
+        d["search_max_shift_fraction"] = self.search_max_shift_fraction
+        d["search_max_iterations"] = self.search_max_iterations
+        d["search_objective_schedule"] = self.search_objective_schedule
+        d["search_adaptive_operators"] = self.search_adaptive_operators
+        d["search_surrogate_min_spearman"] = self.search_surrogate_min_spearman
+        d["search_official_eval_every_n_steps"] = self.search_official_eval_every_n_steps
+        d["search_enable_net_aware"] = self.search_enable_net_aware
+        d["search_enable_swap"] = self.search_enable_swap
+        d["search_enable_cluster"] = self.search_enable_cluster
         return d
 
     @classmethod
@@ -333,4 +396,25 @@ class RunConfig:
         out.setdefault("dreamplace_mount_testcase", True)
         out.setdefault("dreamplace_docker_extra_args", None)
         out.setdefault("dreamplace_docker_executable", "docker")
+        out.setdefault("solver_backend", "legacy")
+        sf = out.get("search_families")
+        if isinstance(sf, list):
+            out["search_families"] = tuple(str(x) for x in sf)
+        else:
+            out.setdefault("search_families", ("benchmark_jitter", "random_legal"))
+        out.setdefault("search_seeds_per_family", 2)
+        out.setdefault("search_screen_seconds", None)
+        out.setdefault("search_refine_top_k", 3)
+        out.setdefault("search_sa_cooling_rate", 0.995)
+        out.setdefault("search_sa_min_temperature", 1e-6)
+        out.setdefault("search_sa_initial_temperature_scale", 0.05)
+        out.setdefault("search_max_shift_fraction", 0.3)
+        out.setdefault("search_max_iterations", 500_000)
+        out.setdefault("search_objective_schedule", "hpwl_then_full")
+        out.setdefault("search_adaptive_operators", True)
+        out.setdefault("search_surrogate_min_spearman", 0.90)
+        out.setdefault("search_official_eval_every_n_steps", None)
+        out.setdefault("search_enable_net_aware", True)
+        out.setdefault("search_enable_swap", True)
+        out.setdefault("search_enable_cluster", True)
         return cls(**{k: v for k, v in out.items() if k in cls.__dataclass_fields__})

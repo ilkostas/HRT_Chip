@@ -25,6 +25,7 @@ from hrt_chip.config import (
     SamplerBackend,
     SamplerMode,
     SelectionPolicy,
+    SolverBackend,
     SyntheticCurriculum,
     SyntheticDatasetConfig,
     TrainingConfig,
@@ -250,6 +251,11 @@ def run(
     ),
     experiment_tag: Optional[str] = typer.Option(None, "--experiment-tag", help="Label stored in results / sweeps."),
     experiment_notes: Optional[str] = typer.Option(None, "--experiment-notes", help="Free-form experiment notes."),
+    solver_backend: str = typer.Option(
+        "legacy",
+        "--solver-backend",
+        help="legacy: diffusion generate path (default). search_hybrid: initialize + SA + evaluate (see docs/hybrid-search-solver.md).",
+    ),
 ) -> None:
     """Run generate -> legalize -> evaluate (stub) and write artifacts under output_dir/<run_id>."""
     if sampler_backend == "pytorch_checkpoint" and checkpoint is None:
@@ -266,6 +272,8 @@ def run(
         raise typer.BadParameter("--artifact-retention must be full, compact, or best_only")
     if sampler_mode not in ("ddpm_full", "ddpm_subsampled", "ddim"):
         raise typer.BadParameter("--sampler-mode must be ddpm_full, ddpm_subsampled, or ddim")
+    if solver_backend not in ("legacy", "search_hybrid"):
+        raise typer.BadParameter("--solver-backend must be legacy or search_hybrid")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
     rbf = _parse_runtime_budget_fractions(runtime_budget_fractions)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
@@ -315,6 +323,7 @@ def run(
         dreamplace_mount_testcase=dreamplace_mount_testcase,
         dreamplace_docker_extra_args=dreamplace_docker_extra_args,
         dreamplace_docker_executable=dreamplace_docker_executable or RunConfig.dreamplace_docker_executable,
+        solver_backend=cast(SolverBackend, solver_backend),
     )
     results = run_pipeline(cfg, run_id=run_id)
     _print_summary(results, cfg)
@@ -614,6 +623,11 @@ def benchmark_sweep_cmd(
     ),
     experiment_tag: Optional[str] = typer.Option(None, "--experiment-tag"),
     experiment_notes: Optional[str] = typer.Option(None, "--experiment-notes"),
+    solver_backend: str = typer.Option(
+        "legacy",
+        "--solver-backend",
+        help="legacy (default) or search_hybrid for all benchmarks in the sweep.",
+    ),
 ) -> None:
     """Run all 17 IBM benchmarks, print gate status, write sweep_report.json."""
     if evaluator not in ("stub", "official"):
@@ -628,6 +642,8 @@ def benchmark_sweep_cmd(
         raise typer.BadParameter("--checkpoint is required when --sampler-backend=pytorch_checkpoint")
     if sampler_mode not in ("ddpm_full", "ddpm_subsampled", "ddim"):
         raise typer.BadParameter("--sampler-mode must be ddpm_full, ddpm_subsampled, or ddim")
+    if solver_backend not in ("legacy", "search_hybrid"):
+        raise typer.BadParameter("--solver-backend must be legacy or search_hybrid")
     gw = _parse_guidance_weight_triples(guidance_weight if guidance_weight else None)
     rbf = _parse_runtime_budget_fractions(runtime_budget_fractions)
     arch = cast(Optional[Literal["baseline_gnn", "res_gnn", "att_gnn"]], model_architecture)
@@ -674,6 +690,7 @@ def benchmark_sweep_cmd(
         dreamplace_mount_testcase=dreamplace_mount_testcase,
         dreamplace_docker_extra_args=dreamplace_docker_extra_args,
         dreamplace_docker_executable=dreamplace_docker_executable or RunConfig.dreamplace_docker_executable,
+        solver_backend=cast(SolverBackend, solver_backend),
     )
     bench_tuple: tuple[str, ...] | None = None
     if benchmark:
